@@ -1,0 +1,132 @@
+name: Release YouCut
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release Tag (e.g. v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build & Publish Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Resolve Version and Tag
+        id: vars
+        shell: powershell
+        run: |
+          if ($env:GITHUB_REF -like "refs/tags/*") {
+            $tag = $env:GITHUB_REF.Substring(10)
+          } else {
+            $tag = "${{ github.event.inputs.tag_name }}"
+            if (-not $tag) { $tag = "v1.0.0" }
+          }
+          $cleanVersion = $tag.TrimStart('v')
+          Write-Host "Resolved Tag: $tag"
+          Write-Host "Resolved Version: $cleanVersion"
+          echo "RELEASE_TAG=$tag" >> $env:GITHUB_OUTPUT
+          echo "RELEASE_VERSION=$cleanVersion" >> $env:GITHUB_OUTPUT
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r clipgrab/requirements.txt
+          pip install pyinstaller
+
+      - name: Prepare Bundled Binaries (yt-dlp & FFmpeg)
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path "clipgrab\assets"
+
+          # 1. Download official yt-dlp binary
+          Write-Host "Downloading latest yt-dlp.exe..."
+          Invoke-WebRequest -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" -OutFile "clipgrab\assets\yt-dlp.exe"
+          Write-Host "yt-dlp.exe downloaded successfully."
+
+          # 2. Acquire static ffmpeg.exe (use pre-installed runner binary or download fallback)
+          $ffmpegCmd = Get-Command ffmpeg.exe -ErrorAction SilentlyContinue
+          if ($ffmpegCmd) {
+            Write-Host "Found pre-installed FFmpeg on runner: $($ffmpegCmd.Source)"
+            Copy-Item -Path $ffmpegCmd.Source -Destination "clipgrab\assets\ffmpeg.exe" -Force
+          } else {
+            Write-Host "Downloading FFmpeg release..."
+            Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile "ffmpeg.zip"
+            Expand-Archive -Path "ffmpeg.zip" -DestinationPath "ffmpeg_extracted"
+            $foundFfmpeg = Get-ChildItem -Path "ffmpeg_extracted" -Filter "ffmpeg.exe" -Recurse | Select-Object -First 1
+            Copy-Item -Path $foundFfmpeg.FullName -Destination "clipgrab\assets\ffmpeg.exe" -Force
+          }
+
+          Write-Host "Verifying binary existence in assets:"
+          Get-ChildItem -Path "clipgrab\assets"
+
+      - name: Build Standalone Application via PyInstaller (--onedir)
+        shell: powershell
+        run: |
+          python -m PyInstaller clipgrab/build.spec --clean --distpath dist
+          if (-not (Test-Path "dist\YouCut\YouCut.exe")) {
+            Write-Error "PyInstaller build failed: dist\YouCut\YouCut.exe not found."
+            exit 1
+          }
+          Write-Host "PyInstaller onedir build succeeded."
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: |
+          choco install innosetup --no-progress
+          $isccPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $isccPath)) {
+            $isccPath = "C:\Program Files\Inno Setup 6\ISCC.exe"
+          }
+          Write-Host "ISCC found at: $isccPath"
+          echo "ISCC_PATH=$isccPath" >> $env:GITHUB_ENV
+
+      - name: Compile Inno Setup Installer
+        shell: powershell
+        run: |
+          $ver = "${{ steps.vars.outputs.RELEASE_VERSION }}"
+          Write-Host "Compiling installer for version $ver..."
+          & "$env:ISCC_PATH" "/DMyAppVersion=$ver" YouCut.iss
+          $installer = Get-ChildItem -Path "dist" -Filter "YouCut-Setup-*.exe" | Select-Object -First 1
+          if (-not $installer) {
+            Write-Error "Installer build failed: YouCut-Setup-*.exe not found in dist."
+            exit 1
+          }
+          Write-Host "Inno Setup compilation succeeded: $($installer.Name)"
+
+      - name: Package Portable Distribution (ZIP)
+        shell: powershell
+        run: |
+          $ver = "${{ steps.vars.outputs.RELEASE_VERSION }}"
+          $zipPath = "dist\YouCut-Portable-v$ver.zip"
+          Compress-Archive -Path "dist\YouCut\*" -DestinationPath $zipPath -Force
+          Write-Host "Portable ZIP created: $zipPath"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.RELEASE_TAG }}
+          name: YouCut ${{ steps.vars.outputs.RELEASE_TAG }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            dist/YouCut-Setup-*.exe
+            dist/YouCut-Portable-*.zip

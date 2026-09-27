@@ -1,5 +1,7 @@
 #define MyAppName "YouCut"
-#define MyAppVersion "1.0.0"
+#ifndef MyAppVersion
+  #define MyAppVersion "1.0.0"
+#endif
 #define MyAppPublisher "sHUBH"
 #define MyAppExeName "YouCut.exe"
 #define MyAppId "shubh.youcut.clipper.app"
@@ -17,7 +19,7 @@ AllowNoIcons=yes
 ; Per-user install (no UAC / admin prompt required)
 PrivilegesRequired=lowest
 OutputDir=dist
-OutputBaseFilename=YouCut-Setup-v1.0.0
+OutputBaseFilename=YouCut-Setup-v{#MyAppVersion}
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
