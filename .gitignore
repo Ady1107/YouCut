@@ -1,0 +1,58 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+build/
+dist/
+Output/
+eggs/
+.eggs/
+*.egg-info/
+*.egg
+
+# PyInstaller
+# Keep clipgrab/build.spec tracked!
+*.manifest
+
+# Binaries: ffmpeg.exe (~105MB) exceeds GitHub's 100MB limit and must not be committed.
+# yt-dlp.exe is also downloaded during build/setup or release CI.
+clipgrab/assets/*.exe
+*.exe
+
+# User runtime data & databases
+.youcut/
+*.db
+*.sqlite3
+*.log
+
+# Media files & temporary download fragments
+*.mp4
+*.mkv
+*.webm
+*.part
+*.ytdl
+*.temp
+*.tmp
+test_out/
+
+# Environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Operating System files
+Thumbs.db
+Desktop.ini
+.DS_Store
