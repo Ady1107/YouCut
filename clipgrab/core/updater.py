@@ -11,6 +11,7 @@ Two independent update channels:
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -83,7 +84,7 @@ def check_app_update(check_url: str = "", current_version: str = "") -> Optional
             "Accept": "application/vnd.github.v3+json",
             "User-Agent": "YouCut-App",
         }
-        resp = requests.get(url, timeout=10, headers=headers)
+        resp = requests.get(url, timeout=20, headers=headers)
         if resp.status_code == 404:
             logger.debug("No release found at endpoint %s", url)
             return None

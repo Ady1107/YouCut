@@ -32,6 +32,7 @@ from clipgrab.config.settings import AppSettings
 from clipgrab.core.ffmpeg_utils import verify_ffmpeg, verify_ytdlp
 from clipgrab.core.updater import UpdateManager, get_installed_ytdlp_version
 from clipgrab.core.logger import get_logger
+from clipgrab import version as version_mod
 from clipgrab.version import APP_VERSION
 
 logger = get_logger("settings_panel")
@@ -287,7 +288,8 @@ class SettingsPanel(QWidget):
             url: Direct download URL for the new YouCut.exe.
         """
         self._app_download_url = url
-        self._banner_version_label.setText(f"v{APP_VERSION} → v{version}")
+        current_v = getattr(version_mod, "APP_VERSION", APP_VERSION)
+        self._banner_version_label.setText(f"v{current_v} → v{version}")
         self._banner_notes.setText(notes or "A new version of YouCut is available.")
         self._update_banner.show()
         logger.info("App update banner shown for v%s", version)
@@ -295,7 +297,8 @@ class SettingsPanel(QWidget):
     def refresh_versions(self) -> None:
         """Refresh version information labels."""
         # App version
-        self._app_version_label.setText(f"YouCut v{APP_VERSION}")
+        current_v = getattr(version_mod, "APP_VERSION", APP_VERSION)
+        self._app_version_label.setText(f"YouCut v{current_v}")
 
         # yt-dlp version
         ytdlp_version = get_installed_ytdlp_version()
