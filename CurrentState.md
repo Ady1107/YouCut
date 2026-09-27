@@ -12,7 +12,7 @@ The application strictly separates the GUI layer from the core logic:
 - **Core backend**: Spawns `yt-dlp.exe` and `ffmpeg.exe` as background subprocesses, tracking real-time progress via JSON streams and standard progress outputs.
 - **GUI frontend**: Modular PySide6 widgets communicating with the backend via thread-safe Qt Signals. Features custom dark/light theme palettes with branded red-to-orange gradient styling.
 - **Data layer**: A SQLite database (`history.db`) for tracking completed downloads, and a JSON configuration file (`config.json`) for user preferences. All stored in `~/.youcut/` with automatic migration from legacy `~/.clipgrab/`.
-- **Update system**: Dual-channel update manager supporting both application version checks (via hosted `version.json` with an in-app banner) and automated background `yt-dlp` updates.
+- **Update system**: Dual-channel update manager supporting both application version checks (querying GitHub Releases API directly with an in-app banner) and automated background `yt-dlp` updates.
 
 ### Binary Bundling Strategy
 To ensure the app works standalone on Windows without requiring users to install external tools, it bundles `yt-dlp.exe` and `ffmpeg.exe` in the `assets/` directory. When packaged with PyInstaller as a standalone executable (`YouCut.exe`), these binaries are extracted to `sys._MEIPASS` and resolved seamlessly at runtime.
@@ -23,9 +23,7 @@ To ensure the app works standalone on Windows without requiring users to install
 
 ```text
 YouCut/
-├── YouCut.exe                       # Standalone portable executable
 ├── YouCut.iss                       # Inno Setup Windows installer script
-├── version.json                     # Release check schema for app updates
 ├── update.md                        # Update publishing guide
 ├── README.md                        # Documentation and instructions
 ├── CurrentState.md                  # This architecture document
@@ -91,7 +89,7 @@ YouCut employs a custom-engineered `QPalette` design system paired with surgical
 - **Dynamic Switcher**: Supports instant toggle between Dark and Light themes at runtime.
 
 ### Update Pipeline
-1. **Application Updates**: Background `AppUpdateChecker` compares `version.json` against `APP_VERSION`. Detects higher versions and surfaces an interactive update banner in the Settings panel with a 1-click download button.
+1. **Application Updates**: Background `AppUpdateChecker` queries the GitHub Releases API (`api.github.com/repos/Ady1107/YouCut/releases/latest`) and compares the latest release `tag_name` against `APP_VERSION`. Detects higher versions and surfaces an interactive update banner in the Settings panel with a 1-click installer download button.
 2. **Component Updates**: Autonomous background checks run every 30 minutes to update `yt-dlp.exe` into `~/.youcut/bin/` so video extraction never breaks.
 
 ---

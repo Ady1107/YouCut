@@ -39,6 +39,7 @@ clipgrab/assets/*.exe
 *.temp
 *.tmp
 test_out/
+scratch/
 
 # Environments
 .venv/

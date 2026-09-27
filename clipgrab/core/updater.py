@@ -2,10 +2,9 @@
 YouCut — Update management system.
 
 Two independent update channels:
-  1. YouCut app updates — checks a hosted version.json via HTTP.
+  1. YouCut app updates — queries GitHub Releases API directly for the latest release.
      When a new app version is found, it notifies the user in the
-     Settings panel with a prominent banner. The user can click the
-     download link to get the new .exe.
+     Settings panel with a prominent banner and direct installer download link.
   2. yt-dlp binary updates — checks PyPI and self-updates the bundled
      yt-dlp.exe in place using 'yt-dlp -U'.
 """
@@ -42,46 +41,88 @@ _CREATION_FLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 # ── Version helpers ──────────────────────────────────────────────────────────
 
 def _parse_version(version_str: str) -> tuple[int, ...]:
-    """Parse a version string like '1.2.3' into a comparable tuple."""
+    """Fallback version parser converting 'v1.2.3' or '1.2.3' into a comparable tuple."""
     try:
-        return tuple(int(x) for x in version_str.strip().split("."))
+        clean = str(version_str).strip().lstrip("vV")
+        parts = clean.split("-")[0].split("+")[0].split(".")
+        return tuple(int(x) for x in parts if x.isdigit())
     except (ValueError, AttributeError):
         return (0,)
 
 
 def _is_newer(remote: str, local: str) -> bool:
-    """Return True if remote version is strictly newer than local version."""
-    return _parse_version(remote) > _parse_version(local)
+    """Return True if remote version is strictly newer than local version using semver comparison."""
+    try:
+        from packaging import version
+        remote_clean = str(remote).strip().lstrip("vV")
+        local_clean = str(local).strip().lstrip("vV")
+        return version.parse(remote_clean) > version.parse(local_clean)
+    except Exception:
+        return _parse_version(remote) > _parse_version(local)
 
 
 # ── App Update Checker ───────────────────────────────────────────────────────
 
-def check_app_update(check_url: str = "") -> Optional[dict]:
+def check_app_update(check_url: str = "", current_version: str = "") -> Optional[dict]:
     """
-    Fetch the remote version.json and compare against APP_VERSION.
+    Query GitHub Releases API directly for the latest release and compare against APP_VERSION.
 
     Returns:
         A dict with keys {version, release_notes, download_url} if an update
         is available, or None if up-to-date or the check failed.
     """
-    url = check_url.strip() if check_url else VERSION_CHECK_URL
-    if not url or "YOUR_USERNAME" in url or "YOUR_GIST_ID" in url:
+    from clipgrab import version as version_mod
+    url = check_url.strip() if check_url else getattr(version_mod, "VERSION_CHECK_URL", "")
+    local_ver = current_version.strip() if current_version else getattr(version_mod, "APP_VERSION", "1.0.0")
+    if not url or "YOUR_USERNAME" in url:
         logger.debug("App update URL not configured — skipping check")
         return None
 
     try:
-        resp = requests.get(url, timeout=10,
-                            headers={"Accept": "application/json",
-                                     "Cache-Control": "no-cache"})
+        headers = {
+            "Accept": "application/vnd.github.v3+json",
+            "User-Agent": "YouCut-App",
+        }
+        resp = requests.get(url, timeout=10, headers=headers)
+        if resp.status_code == 404:
+            logger.debug("No release found at endpoint %s", url)
+            return None
         resp.raise_for_status()
         data = resp.json()
-        remote_version = data.get("version", "")
-        if remote_version and _is_newer(remote_version, APP_VERSION):
+
+        # Extract tag and clean version string
+        raw_tag = data.get("tag_name", "").strip()
+        remote_version = raw_tag.lstrip("vV") if raw_tag else data.get("version", "").strip()
+        if not remote_version:
+            logger.debug("No valid version tag found in release response")
+            return None
+
+        if _is_newer(remote_version, local_ver):
             logger.info(
-                "YouCut app update available: %s → %s", APP_VERSION, remote_version
+                "YouCut app update available: %s → %s", local_ver, remote_version
             )
-            return data
-        logger.info("YouCut is up to date (v%s)", APP_VERSION)
+
+            # Locate YouCut-Setup-*.exe asset download URL
+            download_url = data.get("html_url", "")  # fallback to GitHub Release page
+            assets = data.get("assets", [])
+            for asset in assets:
+                name = asset.get("name", "")
+                if name.startswith("YouCut-Setup-") and name.endswith(".exe"):
+                    download_url = asset.get("browser_download_url", download_url)
+                    break
+
+            if not download_url and "download_url" in data:
+                download_url = data["download_url"]
+
+            notes = data.get("body", "").strip() or data.get("release_notes", "").strip() or f"YouCut {raw_tag} is now available."
+
+            return {
+                "version": remote_version,
+                "release_notes": notes,
+                "download_url": download_url,
+            }
+
+        logger.info("YouCut is up to date (current: v%s, latest: v%s)", APP_VERSION, remote_version)
         return None
     except requests.ConnectionError:
         logger.debug("App update check failed: no internet")
@@ -334,7 +375,7 @@ class UpdateManager(QObject):
     Orchestrates both YouCut app update checking and yt-dlp update checking.
 
     App update channel:
-      - Checks the hosted version.json on startup and on manual check.
+      - Queries GitHub Releases API on startup and on manual check.
       - Emits app_update_available when a newer version exists.
       - Does NOT auto-install the app (user must download the new .exe manually).
 

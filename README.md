@@ -100,7 +100,6 @@ YouCut includes an Inno Setup 6 script (`YouCut.iss`) that creates a professiona
 ```text
 YouCut/
 ├── YouCut.iss                       # Inno Setup Windows installer script
-├── version.json                     # Online release metadata for update checker
 ├── update.md                        # Step-by-step update and distribution guide
 ├── README.md                        # Documentation and instructions
 ├── CurrentState.md                  # Project architecture and development state

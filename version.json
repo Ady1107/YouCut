@@ -1,7 +1,0 @@
-{
-  "version": "1.0.0",
-  "release_date": "2026-09-27",
-  "release_notes": "Initial release of YouCut v1.0.0 — YouTube Video Clipper with precision trimming, modern dark/light UI, fast stream-copy, and queue support.",
-  "download_url": "https://github.com/Ady1107/YouCut/releases/download/v1.0.0/YouCut-Setup-v1.0.0.exe",
-  "min_required_version": "1.0.0"
-}
