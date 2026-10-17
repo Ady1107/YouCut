@@ -55,6 +55,7 @@ class QueueItem:
     speed: str = ""
     eta: str = ""
     status_text: str = ""
+    platform_id: str = "youtube"  # matches PlatformConfig.id; used for queue/history badges
 
     # The actual download request (set when building the job)
     download_request: Optional[DownloadRequest] = None

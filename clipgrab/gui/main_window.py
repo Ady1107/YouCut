@@ -462,6 +462,7 @@ class MainWindow(QMainWindow):
         )
 
         # Build QueueItem
+        platform_id = self._url_input.get_current_platform().id
         item = QueueItem(
             url=self._url_input.get_url(),
             title=self._current_video_info.title,
@@ -474,6 +475,7 @@ class MainWindow(QMainWindow):
             video_format_label=self._format_selector.get_selected_video_label(),
             audio_format_label=self._format_selector.get_selected_audio_label(),
             download_request=request,
+            platform_id=platform_id,
         )
 
         # Set cached thumbnail if available
