@@ -146,12 +146,16 @@ PLATFORM_FACEBOOK = PlatformConfig(
         r"^(?:https?://)?m\.facebook\.com/[\w.]+/videos/\d+",
         # fb.watch short links
         r"^(?:https?://)?fb\.watch/[\w-]+",
-        # facebook.com/share/v/<hash> (newer share links)
-        r"^(?:https?://)?(?:www\.)?facebook\.com/share/[rv]/[\w-]+",
+        # facebook.com/share/[rvp]/<hash> (newer share links for reels, videos, posts)
+        r"^(?:https?://)?(?:www\.)?facebook\.com/share/[rvp]/[\w-]+",
+        # permalink.php (redirect targets for shares)
+        r"^(?:https?://)?(?:www\.)?facebook\.com/permalink\.php\?.*",
+        # facebook.com/<page>/posts/<id>
+        r"^(?:https?://)?(?:www\.)?facebook\.com/[\w.]+/posts/[\w-]+",
         # Reels in /stories/
         r"^(?:https?://)?(?:www\.)?facebook\.com/stories/\d+/\w+",
     ]),
-    content_kinds={ContentKind.VIDEO, ContentKind.REEL},
+    content_kinds={ContentKind.VIDEO, ContentKind.REEL, ContentKind.POST},
     engine=DownloadEngine.YTDLP,
     notes=(
         "Facebook video pages are inconsistent between mobile/desktop URL formats. "
@@ -224,6 +228,8 @@ PLATFORM_UNSUPPORTED = PlatformConfig(
 
 # ── Detection API ─────────────────────────────────────────────────────────────
 
+_last_logged_detection = None
+
 def detect_platform(url: str) -> PlatformConfig:
     """
     Identify which platform a URL belongs to.
@@ -238,6 +244,7 @@ def detect_platform(url: str) -> PlatformConfig:
     Returns:
         The matching PlatformConfig, or PLATFORM_UNSUPPORTED.
     """
+    global _last_logged_detection
     if not url:
         return PLATFORM_UNSUPPORTED
 
@@ -246,14 +253,20 @@ def detect_platform(url: str) -> PlatformConfig:
     for platform in ALL_PLATFORMS:
         for pattern in platform.url_patterns:
             if pattern.match(url):
-                logger.debug(
-                    "Platform detected: %s  (url=%s)",
-                    platform.display_name,
-                    url[:80],
-                )
+                curr = (platform.id, url[:80])
+                if curr != _last_logged_detection:
+                    _last_logged_detection = curr
+                    logger.debug(
+                        "Platform detected: %s  (url=%s)",
+                        platform.display_name,
+                        url[:80],
+                    )
                 return platform
 
-    logger.debug("No platform matched for url: %s", url[:80])
+    curr = ("unsupported", url[:80])
+    if curr != _last_logged_detection:
+        _last_logged_detection = curr
+        logger.debug("No platform matched for url: %s", url[:80])
     return PLATFORM_UNSUPPORTED
 
 
@@ -304,8 +317,10 @@ def guess_content_kind(url: str, platform: Optional[PlatformConfig] = None) -> C
             return ContentKind.VIDEO
 
     if platform.id == "facebook":
-        if "/reel/" in url_lower:
+        if "/reel/" in url_lower or "/share/r/" in url_lower:
             return ContentKind.REEL
+        if "/share/p/" in url_lower or "/posts/" in url_lower or "permalink.php" in url_lower:
+            return ContentKind.POST
         return ContentKind.VIDEO
 
     if platform.id == "twitter_x":

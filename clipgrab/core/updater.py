@@ -282,7 +282,15 @@ class UpdateChecker(QObject):
             self.check_completed.emit(current, "", False)
             return
 
-        update_available = latest != current and current != "unknown"
+        update_available = False
+        if current and current != "unknown" and latest:
+            try:
+                from packaging import version
+                # packaging.version correctly handles 2026.08.19 == 2026.8.19
+                update_available = version.parse(latest) > version.parse(current)
+            except Exception:
+                update_available = (latest.strip() != current.strip())
+
         logger.info(
             "yt-dlp update check — installed: %s, latest: %s, update_available: %s",
             current, latest, update_available,
@@ -314,6 +322,34 @@ class UpdateChecker(QObject):
                     logger.warning("Could not copy bundled yt-dlp to user dir: %s", e)
 
         ytdlp_path = str(user_ytdlp) if user_ytdlp.is_file() else get_ytdlp_path()
+
+        # Guard 1: Verify version comparison (never run yt-dlp -U if versions are equal or local is newer)
+        current = get_installed_ytdlp_version()
+        latest = get_latest_pypi_version()
+        if current and latest and current != "unknown":
+            try:
+                from packaging import version
+                if version.parse(latest) <= version.parse(current):
+                    logger.info("yt-dlp is already up to date (%s == %s), skipping yt-dlp -U.", current, latest)
+                    self.update_completed.emit(current)
+                    return
+            except Exception as e:
+                logger.debug("Version parse check exception: %s", e)
+
+        # Guard 2: Never run yt-dlp -U while another YouCut instance is running
+        lock_path = Path.home() / ".youcut" / "youcut.lock"
+        if lock_path.is_file():
+            try:
+                from PySide6.QtCore import QLockFile
+                lock_test = QLockFile(str(lock_path))
+                if not lock_test.tryLock(50):
+                    logger.warning("Another YouCut instance is running; skipping yt-dlp -U.")
+                    self.update_failed.emit("Another YouCut instance is currently running.")
+                    return
+                lock_test.unlock()
+            except Exception as e:
+                logger.debug("Lockfile check exception: %s", e)
+
         logger.info("Starting yt-dlp self-update: %s -U", ytdlp_path)
         self.status_message.emit("Updating yt-dlp...")
 

@@ -78,6 +78,12 @@ class AppSettings:
     # Thumbnail cache directory
     thumbnail_cache_dir: str = ""
 
+    # UI navigation & section state
+    sidebar_collapsed: bool = False
+    expanded_groups: list[str] = field(default_factory=lambda: ["youtube", "instagram", "facebook", "pinterest", "twitter_x"])
+    last_section: str = "home"
+    section_preferences: dict[str, dict[str, Any]] = field(default_factory=dict)
+
     def __post_init__(self) -> None:
         """Set dynamic defaults after initialization."""
         if not self.last_output_folder:

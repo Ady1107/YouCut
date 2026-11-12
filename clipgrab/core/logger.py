@@ -31,9 +31,14 @@ def setup_logging(level: int = logging.DEBUG) -> logging.Logger:
     """
     logger = logging.getLogger("youcut")
     logger.setLevel(level)
+    logger.propagate = False  # Prevent propagating to root logger to eliminate duplicate lines
+
+    count_before = len(logger.handlers)
+    root_count_before = len(logging.getLogger().handlers)
 
     # Prevent duplicate handlers if called multiple times
     if logger.handlers:
+        logger.debug("setup_logging: Already configured (%d handlers)", count_before)
         return logger
 
     log_format = logging.Formatter(
@@ -59,7 +64,8 @@ def setup_logging(level: int = logging.DEBUG) -> logging.Logger:
     console_handler.setFormatter(log_format)
     logger.addHandler(console_handler)
 
-    logger.info("Logging initialized. Log file: %s", log_file)
+    count_after = len(logger.handlers)
+    logger.info("Logging initialized (handlers before=%d, after=%d, root_before=%d). Log file: %s", count_before, count_after, root_count_before, log_file)
     return logger
 
 

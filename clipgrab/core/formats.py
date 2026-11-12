@@ -48,10 +48,13 @@ class VideoFormat:
         parts: list[str] = []
 
         # Resolution with fps
-        res_label = f"{self.height}p"
-        if self.fps and self.fps > 30:
-            res_label += str(self.fps)
-        parts.append(res_label)
+        if self.height and self.height > 0:
+            res_label = f"{self.height}p"
+            if self.fps and self.fps > 30:
+                res_label += str(self.fps)
+            parts.append(res_label)
+        else:
+            parts.append(self.resolution if self.resolution else "Original")
 
         # HDR indicator
         if self.dynamic_range and self.dynamic_range.lower() != "sdr":
@@ -182,6 +185,28 @@ def parse_video_formats(info_dict: dict) -> list[VideoFormat]:
             dynamic_range=fmt.get("dynamic_range"),
         )
         video_formats.append(vf)
+
+    if not video_formats and formats:
+        # Fallback for silent media, GIFs (e.g. X/Twitter GIF), or single-stream media
+        for fmt in formats:
+            fid = str(fmt.get("format_id", "best"))
+            h = fmt.get("height") or 0
+            w = fmt.get("width") or 0
+            ext = fmt.get("ext", "mp4")
+            vcodec = fmt.get("vcodec") or "h264"
+            res = fmt.get("resolution") or (f"{w}x{h}" if (w and h) else "Original")
+            vf = VideoFormat(
+                format_id=fid,
+                resolution=res,
+                height=h,
+                width=w,
+                fps=fmt.get("fps"),
+                vcodec=vcodec if vcodec != "none" else "h264",
+                ext=ext,
+                filesize_approx=fmt.get("filesize_approx") or fmt.get("filesize"),
+                format_note=fmt.get("format_note", "Best available"),
+            )
+            video_formats.append(vf)
 
     # Sort: highest resolution first, then highest fps, then prefer h264 > vp9 > av01
     video_formats.sort(

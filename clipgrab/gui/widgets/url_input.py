@@ -16,6 +16,7 @@ from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -56,6 +57,7 @@ class UrlInputWidget(QWidget):
     info_fetched  = Signal(object)
     fetch_failed  = Signal(str, bool)
     fetch_started = Signal()
+    reroute_requested = Signal(str, str)  # (section_id, current_url)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -104,7 +106,7 @@ class UrlInputWidget(QWidget):
 
         self._paste_btn = QPushButton("📋 Paste")
         self._paste_btn.setMinimumHeight(36)
-        self._paste_btn.setFixedWidth(80)
+        self._paste_btn.setMinimumWidth(92)
         self._paste_btn.clicked.connect(self._on_paste_clicked)
         input_row.addWidget(self._paste_btn)
 
@@ -126,13 +128,41 @@ class UrlInputWidget(QWidget):
 
         layout.addLayout(input_row)
 
-        # Row 3: status / validation message
+        # Row 3: status / validation message + reroute dropdown on error
+        status_row = QHBoxLayout()
         self._status_label = QLabel("")
         self._status_label.setFont(QFont("Segoe UI", 9))
         self._status_label.setWordWrap(True)
-        layout.addWidget(self._status_label)
+        status_row.addWidget(self._status_label, stretch=1)
+
+        self._reroute_combo = QComboBox()
+        self._reroute_combo.setFont(QFont("Segoe UI", 8))
+        self._reroute_combo.setMinimumHeight(26)
+        self._reroute_combo.addItem("Open in another platform...", "")
+        self._reroute_combo.addItem("▶️ YouTube (Video)", "youtube_video")
+        self._reroute_combo.addItem("📸 Instagram (Reel)", "instagram_reel")
+        self._reroute_combo.addItem("📘 Facebook (Video)", "facebook_video")
+        self._reroute_combo.addItem("📌 Pinterest (Pin)", "pinterest_image")
+        self._reroute_combo.addItem("𝕏 Twitter (Video)", "x_video")
+        self._reroute_combo.currentIndexChanged.connect(self._on_reroute_selected)
+        self._reroute_combo.hide()
+        status_row.addWidget(self._reroute_combo)
+
+        layout.addLayout(status_row)
 
     # ── Public API ────────────────────────────────────────────────────────────
+
+    def set_label_text(self, text: str) -> None:
+        """Update the input label (e.g. 'Reel URL', 'Pin URL')."""
+        self._label.setText(text)
+
+    def set_placeholder_text(self, text: str) -> None:
+        """Update the placeholder text."""
+        self._url_input.setPlaceholderText(text)
+
+    def trigger_fetch(self) -> None:
+        """Programmatically trigger fetching."""
+        self._on_fetch_clicked()
 
     def get_url(self) -> str:
         """Return the current URL text (stripped)."""
@@ -260,6 +290,7 @@ class UrlInputWidget(QWidget):
 
         # ── yt-dlp platforms (YouTube, Instagram, Facebook, X) ──
         self.set_fetching(True)
+        self._reroute_combo.hide()
         self.fetch_started.emit()
 
         self._fetch_thread = QThread(self)
@@ -299,35 +330,93 @@ class UrlInputWidget(QWidget):
         if self._fetch_thread:
             self._fetch_thread.quit()
 
+        self._reroute_combo.hide()
         self.info_fetched.emit(video_info)
 
     def _on_fetch_failed(self, error_msg: str, is_extraction_error: bool) -> None:
-        """Handle fetch failure with login-required classification."""
+        """Handle fetch failure with login-required and platform-specific classification."""
         self.set_fetching(False)
 
-        # Detect login-required errors from yt-dlp and show a friendlier message
         login_keywords = [
             "login required", "sign in", "private video",
             "this video is private", "login_required",
             "you need to log in", "authentication required",
+            "log in", "checkpoint", "permission denied",
         ]
         error_lower = error_msg.lower()
         is_login_error = any(kw in error_lower for kw in login_keywords)
 
+        current_url = self.get_url()
+        current_url_lower = current_url.lower()
+        is_facebook = (
+            self._current_platform.id == "facebook"
+            or "facebook.com" in current_url_lower
+            or "fb.watch" in current_url_lower
+        )
+
+        if is_facebook:
+            if is_login_error:
+                # Classify the kind of login-gated Facebook post
+                if "group" in error_lower or "group" in current_url_lower:
+                    kind = "Private Group Post"
+                elif "friend" in error_lower or "friends" in current_url_lower:
+                    kind = "Friends-only Post"
+                elif "age" in error_lower or "restricted" in error_lower:
+                    kind = "Age-restricted / Region-restricted Post"
+                else:
+                    kind = "Login-Gated / Private Post"
+
+                self._reroute_combo.show()
+                clean_err = error_msg.strip()
+                self._status_label.setText(
+                    f"🔒 Facebook [{kind}]: Login required.\n"
+                    f"Raw error: {clean_err}"
+                )
+                self._status_label.setStyleSheet("color: #F77F00;")
+                if self._fetch_thread:
+                    self._fetch_thread.quit()
+                self.fetch_failed.emit(error_msg, False)
+                return
+
+            # Check if this post has no video (e.g. photo/text post, or 404 on share/p/ or permalink)
+            is_post_link = (
+                "/share/p/" in current_url_lower
+                or "/posts/" in current_url_lower
+                or "permalink.php" in current_url_lower
+            )
+            has_no_video = (
+                is_post_link
+                or "no video" in error_lower
+                or "does not contain" in error_lower
+                or "not found" in error_lower
+                or "404" in error_lower
+                or "unsupported url" in error_lower
+            )
+            if has_no_video:
+                self._reroute_combo.show()
+                self._status_label.setText(
+                    "✗ This post has no video. Photo and text posts: Coming soon."
+                )
+                self._status_label.setStyleSheet("color: #e74c3c;")
+                if self._fetch_thread:
+                    self._fetch_thread.quit()
+                self.fetch_failed.emit("This post has no video. Photo and text posts: Coming soon.", False)
+                return
+
         if is_login_error:
+            self._reroute_combo.show()
             platform_name = self._current_platform.display_name
             self._status_label.setText(
                 f"🔒 {platform_name}: This content is private or login-gated.\n"
-                "Private content requires cookie-based login. "
-                "A 'Settings → Accounts' section for cookie import is planned for a future update."
+                f"Raw error: {error_msg.strip()}"
             )
             self._status_label.setStyleSheet("color: #F77F00;")
-            # Emit fetch_failed with is_extraction_error=False so we don't trigger yt-dlp update
             if self._fetch_thread:
                 self._fetch_thread.quit()
             self.fetch_failed.emit(error_msg, False)
             return
 
+        self._reroute_combo.show()
         self._status_label.setText(f"✗ {error_msg}")
         self._status_label.setStyleSheet("color: #e74c3c;")
 
@@ -349,3 +438,14 @@ class UrlInputWidget(QWidget):
         if m > 0:
             return f"{m}m {s}s"
         return f"{s}s"
+
+    def _on_reroute_selected(self, index: int) -> None:
+        """Handle selection from the reroute dropdown on error."""
+        if index > 0:
+            target_sec = self._reroute_combo.itemData(index)
+            url = self.get_url()
+            self._reroute_combo.blockSignals(True)
+            self._reroute_combo.setCurrentIndex(0)
+            self._reroute_combo.blockSignals(False)
+            if target_sec:
+                self.reroute_requested.emit(target_sec, url)

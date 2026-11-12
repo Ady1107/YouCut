@@ -50,7 +50,7 @@ class FormatSelectorWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         # Group box
-        group = QGroupBox("Quality & Format")
+        group = QGroupBox("Quality && Format")
         group_layout = QVBoxLayout(group)
 
         # Audio only toggle
@@ -62,6 +62,21 @@ class FormatSelectorWidget(QWidget):
         # Form layout for dropdowns
         form = QFormLayout()
         form.setSpacing(8)
+
+        # Media output choice (e.g. for GIFs / silent clips: MP4 or GIF)
+        self._media_type_label = QLabel("Output choice:")
+        self._media_type_label.setFont(QFont("Segoe UI", 10))
+        self._media_type_combo = QComboBox()
+        self._media_type_combo.setMinimumHeight(32)
+        self._media_type_combo.setFont(QFont("Segoe UI", 9))
+        self._media_type_combo.addItem("MP4 (original)", "mp4")
+        self._media_type_combo.addItem("GIF", "gif")
+        self._media_type_combo.currentIndexChanged.connect(
+            lambda: self.selection_changed.emit()
+        )
+        form.addRow(self._media_type_label, self._media_type_combo)
+        self._media_type_label.hide()
+        self._media_type_combo.hide()
 
         # Video quality
         self._video_label = QLabel("Video quality:")
@@ -102,7 +117,9 @@ class FormatSelectorWidget(QWidget):
         group_layout.addLayout(form)
         layout.addWidget(group)
 
-        # Initially disable until formats are loaded
+        # Initially populate with placeholder and disable until formats are loaded
+        self._video_combo.addItem("Fetch a link first")
+        self._audio_combo.addItem("Fetch a link first")
         self.setEnabled(False)
 
     def populate_formats(self, video_info: VideoInfo) -> None:
@@ -114,6 +131,7 @@ class FormatSelectorWidget(QWidget):
         """
         self._video_formats = video_info.video_formats
         self._audio_formats = video_info.audio_formats
+        is_silent = len(self._audio_formats) == 0
 
         # Video dropdown
         self._video_combo.clear()
@@ -123,15 +141,28 @@ class FormatSelectorWidget(QWidget):
 
         # Audio dropdown
         self._audio_combo.clear()
-        self._audio_combo.addItem("⭐ Best available", None)
-        for af in self._audio_formats:
-            self._audio_combo.addItem(af.display_label(), af)
+        if is_silent:
+            # Hide audio dropdown for silent media (e.g. X GIFs)
+            self._audio_label.hide()
+            self._audio_combo.hide()
+            self._audio_only_check.hide()
+            # Surface MP4 (original) / GIF output choice
+            self._media_type_label.show()
+            self._media_type_combo.show()
+        else:
+            self._audio_label.show()
+            self._audio_combo.show()
+            self._audio_only_check.show()
+            self._audio_combo.addItem("⭐ Best available", None)
+            for af in self._audio_formats:
+                self._audio_combo.addItem(af.display_label(), af)
 
         self.setEnabled(True)
         logger.debug(
-            "Formats populated: %d video, %d audio",
+            "Formats populated: %d video, %d audio (silent=%s)",
             len(self._video_formats),
             len(self._audio_formats),
+            is_silent,
         )
 
     def clear_formats(self) -> None:
@@ -139,8 +170,34 @@ class FormatSelectorWidget(QWidget):
         self._video_formats = []
         self._audio_formats = []
         self._video_combo.clear()
+        self._video_combo.addItem("Fetch a link first")
         self._audio_combo.clear()
+        self._audio_combo.addItem("Fetch a link first")
+        self._audio_label.show()
+        self._audio_combo.show()
+        self._audio_only_check.show()
+        self._media_type_label.hide()
+        self._media_type_combo.hide()
         self.setEnabled(False)
+
+    def is_gif_selected(self) -> bool:
+        """Whether GIF output format is chosen."""
+        return (
+            self._media_type_combo.isVisible()
+            and self._media_type_combo.currentData() == "gif"
+        )
+
+    def set_gif_mode(self, enabled: bool) -> None:
+        """Force or unforce GIF mode (used by GIF sections)."""
+        if enabled:
+            self._media_type_label.show()
+            self._media_type_combo.show()
+            idx = self._media_type_combo.findData("gif")
+            if idx >= 0:
+                self._media_type_combo.setCurrentIndex(idx)
+        else:
+            self._media_type_label.hide()
+            self._media_type_combo.hide()
 
     @property
     def is_audio_only(self) -> bool:
@@ -180,3 +237,22 @@ class FormatSelectorWidget(QWidget):
         self._output_format_label.setVisible(checked)
         self._output_format_combo.setVisible(checked)
         self.selection_changed.emit()
+
+    def set_audio_only_locked(self, locked: bool) -> None:
+        """Lock or unlock audio-only mode (used by Audio Download sections)."""
+        self._audio_only_check.blockSignals(True)
+        if locked:
+            self._audio_only_check.setChecked(True)
+            self._audio_only_check.setEnabled(False)
+            self._video_label.setVisible(False)
+            self._video_combo.setVisible(False)
+            self._output_format_label.setVisible(True)
+            self._output_format_combo.setVisible(True)
+        else:
+            self._audio_only_check.setEnabled(True)
+            self._audio_only_check.setChecked(False)
+            self._video_label.setVisible(True)
+            self._video_combo.setVisible(True)
+            self._output_format_label.setVisible(False)
+            self._output_format_combo.setVisible(False)
+        self._audio_only_check.blockSignals(False)

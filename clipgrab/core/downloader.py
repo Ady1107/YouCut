@@ -19,6 +19,12 @@ _CREATION_FLAGS = 0x08000000 if os.name == "nt" else 0
 _PROGRESS_RE = re.compile(r"\[download\]\s+(\d+\.\d+)%")
 _FFMPEG_RE = re.compile(r"time=(\d{2}):(\d{2}):(\d{2}\.\d{2})")
 
+_last_executed_command: list[str] = []
+
+def get_last_executed_command() -> str:
+    """Return the last executed yt-dlp or ffmpeg command string."""
+    return " ".join(_last_executed_command)
+
 
 class DownloadRequest:
     def __init__(
@@ -36,6 +42,7 @@ class DownloadRequest:
         force_keyframes: bool = False,
         frame_accurate_clipping: bool = False,
         concurrent_fragments: int = 16,
+        convert_to_gif: bool = False,
     ):
         self.url = url
         self.output_dir = output_dir
@@ -50,6 +57,7 @@ class DownloadRequest:
         self.force_keyframes = force_keyframes
         self.frame_accurate_clipping = frame_accurate_clipping
         self.concurrent_fragments = concurrent_fragments
+        self.convert_to_gif = convert_to_gif
 
 
 def kill_process_tree(pid: int) -> None:
@@ -83,6 +91,7 @@ class DownloadWorker(QObject):
     progress_updated = Signal(float, str, str, int, int)
     status_changed = Signal(str)
     download_finished = Signal(str)
+    download_finished_with_warning = Signal(str, str)
     download_failed = Signal(str, bool)
 
     def __init__(self, parent: Optional[QObject] = None):
@@ -162,7 +171,8 @@ class DownloadWorker(QObject):
 
     @Slot()
     def request_cancel(self) -> None:
-        logger.info("[DEBUG] request_cancel() invoked")
+        logger.info("request_cancel() invoked: setting _cancel_requested=True")
+        self._cancel_requested = True
         self.kill_process_tree()
 
     def is_cancel_requested(self) -> bool:
@@ -400,13 +410,105 @@ class DownloadWorker(QObject):
             return
 
         output_path = self._find_output_file(request)
-        if output_path:
-            logger.info("Download completed: %s", output_path)
-            self.download_finished.emit(output_path)
-        else:
+        if not output_path or not os.path.isfile(output_path):
             logger.warning("Download completed but output file not found in %s", request.output_dir)
-            self.download_finished.emit("")
-            
+            self.download_finished_with_warning.emit("", "Output file not found after download completed")
+            self._process = None
+            return
+
+        file_size = os.path.getsize(output_path)
+        if file_size == 0:
+            logger.warning("Output file is empty (0 bytes): %s", output_path)
+            self.download_finished_with_warning.emit(output_path, "Output file is empty (0 bytes)")
+            self._process = None
+            return
+
+        # Handle GIF conversion if requested
+        if getattr(request, "convert_to_gif", False):
+            self.status_changed.emit("Converting to GIF with high-quality palette...")
+            gif_path = os.path.splitext(output_path)[0] + ".gif"
+            ffmpeg_exe = os.path.join(get_ffmpeg_directory(), "ffmpeg.exe")
+            conv_cmd = [
+                ffmpeg_exe, "-y",
+                "-i", output_path,
+                "-vf", "fps=15,scale=flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse",
+                gif_path
+            ]
+            global _last_executed_command
+            _last_executed_command = list(conv_cmd)
+            logger.info("Executing GIF conversion: %s", " ".join(conv_cmd))
+            try:
+                import subprocess
+                conv_res = subprocess.run(conv_cmd, capture_output=True, text=True, creationflags=_CREATION_FLAGS)
+                if conv_res.returncode == 0 and os.path.isfile(gif_path) and os.path.getsize(gif_path) > 0:
+                    output_path = gif_path
+                    file_size = os.path.getsize(output_path)
+                    # Check GIF size warning (> 10MB)
+                    if file_size > 10 * 1024 * 1024:
+                        size_mb = file_size / (1024 * 1024)
+                        reason = f"Large GIF size ({size_mb:.1f} MB)"
+                        logger.warning("GIF file size is large: %.1f MB", size_mb)
+                        self.download_finished_with_warning.emit(output_path, reason)
+                        self._process = None
+                        return
+                else:
+                    logger.error("GIF conversion failed: %s", conv_res.stderr)
+                    self.download_finished_with_warning.emit(output_path, "GIF conversion failed; kept MP4")
+                    self._process = None
+                    return
+            except Exception as e:
+                logger.error("GIF conversion exception: %s", e)
+
+        # Post-download validation: video stream & duration check
+        ffmpeg_exe = os.path.join(get_ffmpeg_directory(), "ffmpeg.exe")
+        try:
+            import subprocess
+            probe_res = subprocess.run(
+                [ffmpeg_exe, "-i", output_path],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                creationflags=_CREATION_FLAGS,
+            )
+            probe_text = probe_res.stderr
+            has_video = "Stream #" in probe_text and "Video:" in probe_text
+            has_audio = "Stream #" in probe_text and "Audio:" in probe_text
+
+            if not request.audio_only and not getattr(request, "convert_to_gif", False):
+                if not has_video:
+                    reason = "No video stream detected in output file"
+                    logger.warning("Post-download validation failed: %s", reason)
+                    self.download_finished_with_warning.emit(output_path, reason)
+                    self._process = None
+                    return
+            elif request.audio_only:
+                if not has_audio:
+                    reason = "No audio stream detected in output file"
+                    logger.warning("Post-download validation failed: %s", reason)
+                    self.download_finished_with_warning.emit(output_path, reason)
+                    self._process = None
+                    return
+
+            # Duration tolerance check for clipped downloads
+            if request.start_time is not None and request.end_time is not None:
+                requested_duration = request.end_time - request.start_time
+                dur_match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", probe_text)
+                if dur_match:
+                    h, m, s = float(dur_match.group(1)), float(dur_match.group(2)), float(dur_match.group(3))
+                    actual_duration = h * 3600 + m * 60 + s
+                    delta = abs(actual_duration - requested_duration)
+                    max_tol = 1.0 if (request.frame_accurate_clipping or request.force_keyframes) else 5.0
+                    if delta > max_tol:
+                        reason = f"Duration mismatch: {actual_duration:.1f}s vs {requested_duration:.1f}s requested (delta {delta:.2f}s > {max_tol:.1f}s)"
+                        logger.warning("Post-download validation warning: %s", reason)
+                        self.download_finished_with_warning.emit(output_path, reason)
+                        self._process = None
+                        return
+        except Exception as e:
+            logger.warning("Post-download validation probe exception: %s", e)
+
+        logger.info("Download completed & validated: %s", output_path)
+        self.download_finished.emit(output_path)
         self._process = None
 
     def _on_process_error(self, error: QProcess.ProcessError) -> None:
@@ -507,6 +609,8 @@ class DownloadWorker(QObject):
                 logger.info("Clip: using stream-copy (default, no re-encode)")
 
         cmd.append(request.url)
+        global _last_executed_command
+        _last_executed_command = list(cmd)
         return cmd
 
     def _handle_json_progress(self, data: dict) -> None:

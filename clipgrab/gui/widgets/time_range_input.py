@@ -1,4 +1,4 @@
-"""
+﻿"""
 YouCut — Responsive & Adjustable Time Range Input Widget.
 
 Provides:
@@ -19,6 +19,7 @@ from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFrame,
     QGroupBox,
     QHBoxLayout,
@@ -422,14 +423,26 @@ class TimeRangeWidget(QWidget):
         bottom_row = QHBoxLayout()
         bottom_row.setSpacing(10)
 
-        self._frame_accurate_check = QCheckBox("Frame-accurate trimming (slower, but exact)")
-        self._frame_accurate_check.setChecked(False)
-        self._frame_accurate_check.setFont(QFont("Segoe UI", 9))
-        self._frame_accurate_check.setToolTip(
-            "When off (default), uses stream-copy for blazing fast speeds.\n"
-            "When on, does a full re-encode to ensure cuts are exactly at the requested frames."
+        trim_lbl = QLabel("Trim mode:")
+        trim_lbl.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
+        bottom_row.addWidget(trim_lbl)
+
+        self._trim_mode_combo = QComboBox()
+        self._trim_mode_combo.setFont(QFont("Segoe UI", 9))
+        self._trim_mode_combo.addItem("Auto", "auto")
+        self._trim_mode_combo.addItem("Fast", "fast")
+        self._trim_mode_combo.addItem("Exact", "exact")
+        self._trim_mode_combo.setToolTip(
+            "Auto: Uses Exact (re-encode) for sources <= 10 min, Fast (stream-copy) for longer.\n"
+            "Fast: Blazing fast stream-copy without re-encoding.\n"
+            "Exact: Frame-accurate re-encode with --force-keyframes-at-cuts."
         )
-        bottom_row.addWidget(self._frame_accurate_check)
+        self._trim_mode_combo.currentIndexChanged.connect(self._on_trim_mode_changed)
+        bottom_row.addWidget(self._trim_mode_combo)
+
+        self._trim_mode_badge = QLabel("")
+        self._trim_mode_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        bottom_row.addWidget(self._trim_mode_badge)
 
         bottom_row.addStretch()
 
@@ -469,7 +482,7 @@ class TimeRangeWidget(QWidget):
         self._end_input.setEnabled(False)
         self._range_slider.setEnabled(False)
         self._clipping_container.setEnabled(False)
-        self._frame_accurate_check.setEnabled(False)
+        self._trim_mode_combo.setEnabled(False)
 
     def set_duration(self, duration: float) -> None:
         """
@@ -508,7 +521,8 @@ class TimeRangeWidget(QWidget):
         self._validation_label.setText("")
         self._validation_label.hide()
         self._full_video_check.setChecked(True)
-        self._frame_accurate_check.setChecked(False)
+        self._trim_mode_combo.setCurrentIndex(0)
+        self._trim_mode_badge.setText("")
         self._range_slider.set_duration(100.0)
         self._range_slider.set_range(0.0, 100.0, block_signals=True)
         self._syncing = False
@@ -517,7 +531,7 @@ class TimeRangeWidget(QWidget):
         self._end_input.setEnabled(False)
         self._range_slider.setEnabled(False)
         self._clipping_container.setEnabled(False)
-        self._frame_accurate_check.setEnabled(False)
+        self._trim_mode_combo.setEnabled(False)
 
     @property
     def is_full_video(self) -> bool:
@@ -526,8 +540,43 @@ class TimeRangeWidget(QWidget):
 
     @property
     def is_frame_accurate(self) -> bool:
-        """Whether frame accurate clipping (slower) is selected."""
-        return self._frame_accurate_check.isChecked()
+        """Whether Exact trim mode is resolved (used by downloader)."""
+        return self._resolve_trim_mode() == "exact"
+
+    @property
+    def trim_mode(self) -> str:
+        """Return user-selected trim mode: 'auto', 'fast', or 'exact'."""
+        return self._trim_mode_combo.currentData() or "auto"
+
+    def _resolve_trim_mode(self) -> str:
+        """Resolve effective trim mode. Auto -> Exact if source <= 600s, else Fast."""
+        mode = self.trim_mode
+        if mode == "auto":
+            return "exact" if self._duration <= 600.0 else "fast"
+        return mode
+
+    def _on_trim_mode_changed(self) -> None:
+        """Update badge to show the resolved effective mode."""
+        mode = self._trim_mode_combo.currentData() or "auto"
+        resolved = self._resolve_trim_mode()
+        if mode == "auto":
+            badge_text = f"Auto → {resolved.capitalize()}"
+        else:
+            badge_text = resolved.capitalize()
+
+        if resolved == "exact":
+            badge_style = (
+                "QLabel { background: rgba(46,204,113,0.12); color: #2ecc71;"
+                "  border: 1px solid rgba(46,204,113,0.3); border-radius: 8px; padding: 1px 8px; }"
+            )
+        else:
+            badge_style = (
+                "QLabel { background: rgba(52,152,219,0.12); color: #3498db;"
+                "  border: 1px solid rgba(52,152,219,0.3); border-radius: 8px; padding: 1px 8px; }"
+            )
+        self._trim_mode_badge.setText(badge_text)
+        self._trim_mode_badge.setStyleSheet(badge_style)
+        self.range_changed.emit()
 
     def get_start_time(self) -> Optional[str]:
         """Get the start time string, or None if full video mode."""
@@ -576,7 +625,11 @@ class TimeRangeWidget(QWidget):
         self._end_input.setEnabled(clipping_enabled)
         self._range_slider.setEnabled(clipping_enabled)
         self._clipping_container.setEnabled(clipping_enabled)
-        self._frame_accurate_check.setEnabled(clipping_enabled)
+        self._trim_mode_combo.setEnabled(clipping_enabled)
+        if clipping_enabled:
+            self._on_trim_mode_changed()
+        else:
+            self._trim_mode_badge.setText("")
 
         if checked:
             self._clip_badge.setText("Clip: Full Video")

@@ -26,6 +26,7 @@ class QueueItemStatus(Enum):
     PENDING = "Pending"
     DOWNLOADING = "Downloading"
     DONE = "Done"
+    WARNING = "Finished with warning"
     FAILED = "Failed"
     CANCELLED = "Cancelled"
     STOPPED = "Stopped"
@@ -50,6 +51,7 @@ class QueueItem:
     output_path: str = ""
     file_size: int = 0
     status: QueueItemStatus = QueueItemStatus.PENDING
+    warning_reason: str = ""
     error_msg: str = ""
     progress: float = 0.0
     speed: str = ""
@@ -417,6 +419,7 @@ class QueueManager(QObject):
         worker.progress_updated.connect(self._on_progress)
         worker.status_changed.connect(self._on_status)
         worker.download_finished.connect(self._on_finished)
+        worker.download_finished_with_warning.connect(self._on_finished_with_warning)
         worker.download_failed.connect(self._on_failed)
 
         worker.download_request = item.download_request
@@ -474,6 +477,28 @@ class QueueManager(QObject):
             actual_index = self._index_of(self._active_item_id)
             if actual_index >= 0:
                 self._items[actual_index].status = QueueItemStatus.DONE
+                self._items[actual_index].output_path = output_path
+                self._items[actual_index].progress = 100.0
+                if output_path and os.path.isfile(output_path):
+                    self._items[actual_index].file_size = os.path.getsize(output_path)
+
+        if actual_index >= 0:
+            self.item_updated.emit(actual_index)
+            
+        self._cleanup_worker()
+
+    def _on_finished_with_warning(self, output_path: str, warning_reason: str) -> None:
+        """Handle download completion with a validation warning."""
+        if not self._active_item_id:
+            return
+            
+        actual_index = -1
+        with QMutexLocker(self._mutex):
+            actual_index = self._index_of(self._active_item_id)
+            if actual_index >= 0:
+                self._items[actual_index].status = QueueItemStatus.WARNING
+                self._items[actual_index].warning_reason = warning_reason
+                self._items[actual_index].status_text = f"Finished with warning: {warning_reason}"
                 self._items[actual_index].output_path = output_path
                 self._items[actual_index].progress = 100.0
                 if output_path and os.path.isfile(output_path):

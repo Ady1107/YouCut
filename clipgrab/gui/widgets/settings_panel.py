@@ -242,6 +242,16 @@ class SettingsPanel(QWidget):
         self._ffmpeg_version_label.setFont(QFont("Segoe UI", 10))
         versions_layout.addWidget(self._ffmpeg_version_label)
 
+        diag_row = QHBoxLayout()
+        self._copy_diag_btn = QPushButton("📋 Copy Diagnostics")
+        self._copy_diag_btn.setMinimumHeight(34)
+        self._copy_diag_btn.setFont(QFont("Segoe UI", 10))
+        self._copy_diag_btn.setToolTip("Copy app/yt-dlp/ffmpeg versions, last command, and recent logs (redacted) to clipboard")
+        self._copy_diag_btn.clicked.connect(self._on_copy_diagnostics)
+        diag_row.addWidget(self._copy_diag_btn)
+        diag_row.addStretch()
+        versions_layout.addLayout(diag_row)
+
         layout.addWidget(versions_group)
         layout.addStretch()
 
@@ -372,3 +382,60 @@ class SettingsPanel(QWidget):
         """Stop any active UI reset timers on close."""
         if hasattr(self, "_btn_reset_timer") and self._btn_reset_timer and self._btn_reset_timer.isActive():
             self._btn_reset_timer.stop()
+
+    def _on_copy_diagnostics(self) -> None:
+        """Collect diagnostic info, redact sensitive tokens/paths, and copy to clipboard."""
+        import re, sys
+        from pathlib import Path
+        from PySide6.QtWidgets import QApplication
+        from clipgrab.version import APP_VERSION
+        from clipgrab.core.updater import get_installed_ytdlp_version
+        from clipgrab.core.downloader import get_last_executed_command
+        from clipgrab.gui.widgets.toast_notification import show_toast
+
+        ytdlp_ver = get_installed_ytdlp_version()
+        ffmpeg_ver_text = self._ffmpeg_version_label.text().replace("FFmpeg: ", "")
+        last_cmd = get_last_executed_command() or "None"
+
+        log_file = Path.home() / ".youcut" / "youcut.log"
+        log_lines = []
+        if log_file.is_file():
+            try:
+                with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+                    all_lines = f.readlines()
+                    log_lines = all_lines[-200:]
+            except Exception as e:
+                log_lines = [f"Failed to read log file: {e}\n"]
+
+        def redact_text(text: str) -> str:
+            # Redact URL query strings (?key=val...)
+            text = re.sub(
+                r'(https?://[^\s"\'<>]+?\?)([^\s"\'<>]+)',
+                r'\1[REDACTED_QUERY]',
+                text
+            )
+            # Redact cookie paths and browser arguments
+            text = re.sub(r'(--cookies\s+)([^\s]+)', r'\1[REDACTED_COOKIE_PATH]', text)
+            text = re.sub(r'(--cookies-from-browser\s+)([^\s]+)', r'\1[REDACTED_COOKIE_BROWSER]', text)
+            text = re.sub(r'[A-Za-z]:\\[^\s\r\n"\']*[Cc]ookies?[^\s\r\n"\']*', '[REDACTED_COOKIE_PATH]', text)
+            return text
+
+        diag_report = [
+            "=== YOUCUT DIAGNOSTICS ===",
+            f"App Version: v{APP_VERSION}",
+            f"yt-dlp Version: {ytdlp_ver}",
+            f"FFmpeg Version: {ffmpeg_ver_text}",
+            f"Platform / OS: {sys.platform}",
+            "",
+            "=== LAST EXECUTED COMMAND ===",
+            redact_text(last_cmd),
+            "",
+            f"=== RECENT LOGS (LAST {len(log_lines)} LINES) ===",
+        ]
+        diag_report.extend([redact_text(line.rstrip()) for line in log_lines])
+
+        full_text = "\n".join(diag_report)
+        cb = QApplication.clipboard()
+        if cb:
+            cb.setText(full_text)
+            show_toast(self.window() if self.window() else self, "Diagnostics copied to clipboard!", toast_type="success")

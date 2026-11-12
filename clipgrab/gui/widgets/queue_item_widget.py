@@ -30,7 +30,8 @@ logger = get_logger("queue_item_widget")
 _STATUS_COLORS = {
     QueueItemStatus.PENDING: ("#F7B731", "⏳"),       # Warm amber
     QueueItemStatus.DOWNLOADING: ("#E63946", "⬇️"),   # Brand red
-    QueueItemStatus.DONE: ("#27AE60", "✅"),           # Rich green
+    QueueItemStatus.DONE: ("#27AE60", "✅"),
+    QueueItemStatus.WARNING: ("#F77F00", "⚠️"),           # Rich green
     QueueItemStatus.FAILED: ("#E74C3C", "❌"),         # Bright red
     QueueItemStatus.CANCELLED: ("#8E8E93", "🚫"),     # Neutral gray
     QueueItemStatus.STOPPED: ("#F77F00", "⏸"),        # Brand orange
@@ -251,6 +252,13 @@ class QueueItemWidget(QFrame):
             self._retry_btn.hide()
             self._resume_btn.hide()
             self._open_location_btn.hide()
+        elif item.status == QueueItemStatus.WARNING:
+            self._progress_bar.setVisible(True)
+            self._progress_bar.setValue(100)
+            self._details_label.setText(f"Finished with warning: {item.warning_reason}" if item.warning_reason else "Finished with warning")
+            self._details_label.setStyleSheet("color: #F77F00;")
+            self._cancel_btn.setVisible(False)
+            self._open_btn.setVisible(bool(item.output_path))
         elif item.status == QueueItemStatus.DONE:
             self._remove_btn.show()
             self._retry_btn.hide()
