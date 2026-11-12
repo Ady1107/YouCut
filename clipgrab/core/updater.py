@@ -307,7 +307,9 @@ class UpdateChecker(QObject):
         Emits update_completed on success, update_failed on error.
         """
         # Ensure user bin directory exists
-        user_bin_dir = Path.home() / ".youcut" / "bin"
+        env_home = os.environ.get("YOUCUT_HOME")
+        base_dir = Path(env_home).resolve() if env_home else Path.home() / ".youcut"
+        user_bin_dir = base_dir / "bin"
         user_bin_dir.mkdir(parents=True, exist_ok=True)
         user_ytdlp = user_bin_dir / "yt-dlp.exe"
 
@@ -337,7 +339,7 @@ class UpdateChecker(QObject):
                 logger.debug("Version parse check exception: %s", e)
 
         # Guard 2: Never run yt-dlp -U while another YouCut instance is running
-        lock_path = Path.home() / ".youcut" / "youcut.lock"
+        lock_path = base_dir / "youcut.lock"
         if lock_path.is_file():
             try:
                 from PySide6.QtCore import QLockFile

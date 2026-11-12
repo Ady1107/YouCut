@@ -22,7 +22,11 @@ logger = get_logger("history_db")
 
 def _get_db_path() -> str:
     """Get the path to the history database file."""
-    db_dir = Path.home() / ".youcut"
+    env_home = os.environ.get("YOUCUT_HOME")
+    if env_home:
+        db_dir = Path(env_home).resolve()
+    else:
+        db_dir = Path.home() / ".youcut"
     db_dir.mkdir(parents=True, exist_ok=True)
     return str(db_dir / "history.db")
 

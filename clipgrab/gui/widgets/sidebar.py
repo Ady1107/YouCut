@@ -29,6 +29,7 @@ from clipgrab.gui.sections import (
     PLATFORM_GROUPS,
     PlatformGroup,
     SectionConfig,
+    VISIBLE_PLATFORM_GROUPS,
     get_section_by_id,
 )
 
@@ -166,7 +167,7 @@ class Sidebar(QWidget):
         self._expanded_groups = set(
             expanded_groups
             if expanded_groups is not None
-            else [g.id for g in PLATFORM_GROUPS]
+            else [g.id for g in VISIBLE_PLATFORM_GROUPS]
         )
         self._active_target = last_section or "home"
         self._active_page_type = "home" if self._active_target == "home" else (
@@ -248,7 +249,7 @@ class Sidebar(QWidget):
         self._groups_layout.setContentsMargins(0, 2, 0, 2)
         self._groups_layout.setSpacing(2)
 
-        for group in PLATFORM_GROUPS:
+        for group in VISIBLE_PLATFORM_GROUPS:
             is_exp = group.id in self._expanded_groups
             header = SidebarGroupHeader(group, is_expanded=is_exp)
             header.toggled.connect(self._on_group_toggled)
@@ -282,7 +283,7 @@ class Sidebar(QWidget):
         rail_layout.setContentsMargins(0, 0, 0, 0)
         rail_layout.setSpacing(6)
 
-        for group in PLATFORM_GROUPS:
+        for group in VISIBLE_PLATFORM_GROUPS:
             r_btn = QPushButton(group.icon)
             r_btn.setFont(QFont("Segoe UI Emoji", 13))
             r_btn.setToolTip(f"{group.name} ({group.shortcut})")

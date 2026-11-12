@@ -397,7 +397,9 @@ class SettingsPanel(QWidget):
         ffmpeg_ver_text = self._ffmpeg_version_label.text().replace("FFmpeg: ", "")
         last_cmd = get_last_executed_command() or "None"
 
-        log_file = Path.home() / ".youcut" / "youcut.log"
+        env_home = os.environ.get("YOUCUT_HOME")
+        base_dir = Path(env_home).resolve() if env_home else Path.home() / ".youcut"
+        log_file = base_dir / "youcut.log"
         log_lines = []
         if log_file.is_file():
             try:

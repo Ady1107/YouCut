@@ -162,12 +162,10 @@ class MainWindow(QMainWindow):
         """Register application keyboard shortcuts."""
         # Ctrl+0: Home
         QShortcut(QKeySequence("Ctrl+0"), self, lambda: self._sidebar.select_target("home", "home"))
-        # Ctrl+1..5: Platform groups
+        # Ctrl+1..3: Platform groups
         QShortcut(QKeySequence("Ctrl+1"), self, lambda: self._sidebar.select_target("section", "youtube_video"))
         QShortcut(QKeySequence("Ctrl+2"), self, lambda: self._sidebar.select_target("section", "instagram_reel"))
         QShortcut(QKeySequence("Ctrl+3"), self, lambda: self._sidebar.select_target("section", "facebook_video"))
-        QShortcut(QKeySequence("Ctrl+4"), self, lambda: self._sidebar.select_target("section", "pinterest_image"))
-        QShortcut(QKeySequence("Ctrl+5"), self, lambda: self._sidebar.select_target("section", "x_video"))
         # Ctrl+B: Toggle rail
         QShortcut(QKeySequence("Ctrl+B"), self, self._sidebar.toggle_rail)
 

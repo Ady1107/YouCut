@@ -97,7 +97,9 @@ def get_ytdlp_path() -> str:
         Absolute path to yt-dlp.exe.
     """
     # 1. User updated copy (persists across onefile runs)
-    user_ytdlp = Path.home() / ".youcut" / "bin" / "yt-dlp.exe"
+    env_home = os.environ.get("YOUCUT_HOME")
+    base_dir = Path(env_home).resolve() if env_home else Path.home() / ".youcut"
+    user_ytdlp = base_dir / "bin" / "yt-dlp.exe"
     if user_ytdlp.is_file():
         logger.debug("Resolved user yt-dlp path: %s", user_ytdlp)
         return str(user_ytdlp)

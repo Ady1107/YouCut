@@ -49,6 +49,7 @@ class PlatformGroup:
     accent_color: str
     shortcut: str
     sections: list[SectionConfig] = field(default_factory=list)
+    hidden: bool = False
 
 
 # ─── YouTube Sections ────────────────────────────────────────────────────────
@@ -294,6 +295,7 @@ PLATFORM_GROUPS: list[PlatformGroup] = [
         accent_color="#E60023",
         shortcut="Ctrl+4",
         sections=[SECTION_PINTEREST_IMAGE, SECTION_PINTEREST_VIDEO],
+        hidden=True,
     ),
     PlatformGroup(
         id="twitter_x",
@@ -302,7 +304,12 @@ PLATFORM_GROUPS: list[PlatformGroup] = [
         accent_color="#1DA1F2",
         shortcut="Ctrl+5",
         sections=[SECTION_X_VIDEO, SECTION_X_GIF, SECTION_X_POST],
+        hidden=True,
     ),
+]
+
+VISIBLE_PLATFORM_GROUPS: list[PlatformGroup] = [
+    g for g in PLATFORM_GROUPS if not g.hidden
 ]
 
 ALL_SECTIONS: dict[str, SectionConfig] = {

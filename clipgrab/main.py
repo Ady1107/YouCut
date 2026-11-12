@@ -31,8 +31,9 @@ IPC_SERVER_NAME = "YouCut_SingleInstance_IPC"
 
 def main() -> int:
     """Application entry point."""
-    # Single-instance guard (QLockFile in ~/.youcut)
-    youcut_dir = os.path.expanduser("~/.youcut")
+    # Single-instance guard (QLockFile in ~/.youcut or YOUCUT_HOME)
+    env_home = os.environ.get("YOUCUT_HOME")
+    youcut_dir = os.path.abspath(env_home) if env_home else os.path.expanduser("~/.youcut")
     os.makedirs(youcut_dir, exist_ok=True)
     lock_path = os.path.join(youcut_dir, "youcut.lock")
     lock_file = QLockFile(lock_path)

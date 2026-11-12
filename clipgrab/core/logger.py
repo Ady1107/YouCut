@@ -2,7 +2,7 @@
 YouCut — Logging configuration.
 
 Sets up rotating file handler and console handler for application-wide logging.
-Log file is stored at ~/.youcut/youcut.log with rotation at 5MB, keeping 3 backups.
+Log file is stored at ~/.youcut/youcut.log (or $YOUCUT_HOME/youcut.log) with rotation at 5MB, keeping 3 backups.
 """
 
 import logging
@@ -14,7 +14,11 @@ from pathlib import Path
 
 def get_log_directory() -> Path:
     """Get the directory where log files are stored."""
-    log_dir = Path.home() / ".youcut"
+    env_home = os.environ.get("YOUCUT_HOME")
+    if env_home:
+        log_dir = Path(env_home).resolve()
+    else:
+        log_dir = Path.home() / ".youcut"
     log_dir.mkdir(parents=True, exist_ok=True)
     return log_dir
 

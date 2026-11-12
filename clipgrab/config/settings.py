@@ -1,7 +1,8 @@
 """
 YouCut — Application settings (JSON config).
 
-Manages user preferences persisted as a JSON file at ~/.youcut/config.json.
+Manages user preferences persisted as a JSON file at ~/.youcut/config.json
+(or $YOUCUT_HOME/config.json when isolated).
 Handles load/save with defaults, type safety, and graceful handling of
 corrupted or missing config files. Automatically migrates from legacy ~/.clipgrab if present.
 """
@@ -20,8 +21,30 @@ from clipgrab.core.logger import get_logger
 logger = get_logger("settings")
 
 
+def get_youcut_dir() -> Path:
+    """
+    Get the base directory for YouCut data (~/.youcut by default).
+
+    If the YOUCUT_HOME environment variable is set, that directory is used instead.
+    This guarantees that tests and harnesses run in an isolated environment without
+    touching the user's real configuration or history.
+    """
+    env_home = os.environ.get("YOUCUT_HOME")
+    if env_home:
+        d = Path(env_home).resolve()
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+    return Path.home() / ".youcut"
+
+
 def _get_config_dir() -> Path:
     """Get the config directory path, migrating legacy ~/.clipgrab if needed."""
+    env_home = os.environ.get("YOUCUT_HOME")
+    if env_home:
+        config_dir = Path(env_home).resolve()
+        config_dir.mkdir(parents=True, exist_ok=True)
+        return config_dir
+
     config_dir = Path.home() / ".youcut"
     legacy_dir = Path.home() / ".clipgrab"
 
@@ -42,12 +65,20 @@ def _get_config_path() -> Path:
     return _get_config_dir() / "config.json"
 
 
+def _get_default_downloads_dir() -> str:
+    """Get the Windows/OS Downloads directory as default save path."""
+    downloads = Path.home() / "Downloads"
+    if downloads.is_dir():
+        return str(downloads)
+    return str(Path.home())
+
+
 @dataclass
 class AppSettings:
     """
     Application settings with typed fields and defaults.
 
-    Persisted as JSON at ~/.youcut/config.json.
+    Persisted as JSON at ~/.youcut/config.json (or $YOUCUT_HOME/config.json).
     """
 
     # Output preferences
@@ -80,19 +111,20 @@ class AppSettings:
 
     # UI navigation & section state
     sidebar_collapsed: bool = False
-    expanded_groups: list[str] = field(default_factory=lambda: ["youtube", "instagram", "facebook", "pinterest", "twitter_x"])
+    expanded_groups: list[str] = field(default_factory=lambda: ["youtube", "instagram", "facebook"])
     last_section: str = "home"
     section_preferences: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Set dynamic defaults after initialization."""
-        if not self.last_output_folder:
-            # Default to user's Downloads folder
-            downloads = Path.home() / "Downloads"
-            if downloads.is_dir():
-                self.last_output_folder = str(downloads)
-            else:
-                self.last_output_folder = str(Path.home())
+        default_dl = _get_default_downloads_dir()
+        if (
+            not self.last_output_folder
+            or "test_out" in self.last_output_folder
+            or "scratch" in self.last_output_folder
+            or not os.path.isdir(self.last_output_folder)
+        ):
+            self.last_output_folder = default_dl
 
         if not self.thumbnail_cache_dir:
             cache_dir = _get_config_dir() / "thumbnails"
@@ -130,6 +162,18 @@ class AppSettings:
             for key, value in data.items():
                 if hasattr(settings, key):
                     setattr(settings, key, value)
+
+            # Ensure save folder is not pointing to scratch/test_out or invalid dir
+            default_dl = _get_default_downloads_dir()
+            if (
+                not settings.last_output_folder
+                or "test_out" in settings.last_output_folder
+                or "scratch" in settings.last_output_folder
+                or not os.path.isdir(settings.last_output_folder)
+            ):
+                logger.info("Resetting invalid/scratch save folder to %s", default_dl)
+                settings.last_output_folder = default_dl
+                settings.save()
 
             logger.info("Settings loaded from %s", config_path)
             return settings

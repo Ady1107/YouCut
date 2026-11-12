@@ -249,7 +249,7 @@ class HomePage(QWidget):
         self._title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hero_layout.addWidget(self._title_lbl)
 
-        self._sub_lbl = QLabel("Paste any YouTube, Instagram, Facebook, Pinterest or X link")
+        self._sub_lbl = QLabel("Paste any YouTube, Instagram or Facebook link")
         self._sub_lbl.setFont(QFont("Segoe UI", 10))
         self._sub_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hero_layout.addWidget(self._sub_lbl)
@@ -339,8 +339,6 @@ class HomePage(QWidget):
             ("▶️ YouTube", SECTION_YOUTUBE_VIDEO.id),
             ("📸 Instagram", SECTION_INSTAGRAM_REEL.id),
             ("📘 Facebook", SECTION_FACEBOOK_VIDEO.id),
-            ("📌 Pinterest", SECTION_PINTEREST_IMAGE.id),
-            ("𝕏 Twitter", SECTION_X_VIDEO.id),
         ]
         for p_name, p_sec in platforms_data:
             p_btn = QPushButton(p_name)
@@ -369,11 +367,9 @@ class HomePage(QWidget):
         tiles_grid.setSpacing(10)
 
         tiles_info = [
-            ("YouTube", "▶️", "Videos, Shorts, Playlists & Clips", "#E63946", SECTION_YOUTUBE_VIDEO.id),
+            ("YouTube", "▶️", "Videos, Shorts & Clips", "#E63946", SECTION_YOUTUBE_VIDEO.id),
             ("Instagram", "📸", "Reels, Posts, Stories & Carousels", "#E1306C", SECTION_INSTAGRAM_REEL.id),
             ("Facebook", "📘", "Watch, Reels, Page Videos & Shares", "#1877F2", SECTION_FACEBOOK_VIDEO.id),
-            ("Pinterest", "📌", "Pins, Images & Video Downloads", "#E60023", SECTION_PINTEREST_IMAGE.id),
-            ("X / Twitter", "𝕏", "Video Tweets & Animated GIFs", "#1DA1F2", SECTION_X_VIDEO.id),
         ]
 
         self._tile_cards.clear()
@@ -383,7 +379,7 @@ class HomePage(QWidget):
             self._tile_cards.append(card)
             row = i // 2
             col = i % 2
-            if i == 4:
+            if i == 2:
                 tiles_grid.addWidget(card, row, col, 1, 2)
             else:
                 tiles_grid.addWidget(card, row, col)
