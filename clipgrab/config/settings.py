@@ -105,6 +105,7 @@ class AppSettings:
     window_y: int = 100
     window_width: int = 1100
     window_height: int = 750
+    window_maximized: bool = False
 
     # Thumbnail cache directory
     thumbnail_cache_dir: str = ""
@@ -113,6 +114,10 @@ class AppSettings:
     sidebar_collapsed: bool = False
     expanded_groups: list[str] = field(default_factory=lambda: ["youtube", "instagram", "facebook"])
     last_section: str = "home"
+
+    # Age-restricted & cookie authentication
+    browser_for_cookies: str = ""  # e.g. "chrome", "firefox", "edge", "brave", "" for None
+    cookies_file_path: str = ""    # Custom cookies.txt path
     section_preferences: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:

@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 from clipgrab.core.logger import get_logger
 from clipgrab.core.platforms import DownloadEngine, detect_platform
 from clipgrab.data.history_db import HistoryDB, HistoryEntry
+from clipgrab.gui.icons import get_svg_icon, get_svg_pixmap
 from clipgrab.gui.sections import (
     SECTION_FACEBOOK_VIDEO,
     SECTION_INSTAGRAM_REEL,
@@ -73,8 +74,14 @@ class PlatformTileCard(QFrame):
         layout.setContentsMargins(14, 10, 14, 10)
         layout.setSpacing(12)
 
-        icon_lbl = QLabel(icon)
-        icon_lbl.setFont(QFont("Segoe UI", 20))
+        icon_lbl = QLabel()
+        icon_lbl.setFixedSize(32, 32)
+        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        if icon in ("youtube", "instagram", "facebook"):
+            icon_lbl.setPixmap(get_svg_pixmap(icon, color=accent_color, size=24))
+        else:
+            icon_lbl.setText(icon)
+            icon_lbl.setFont(QFont("Segoe UI", 16))
         layout.addWidget(icon_lbl)
 
         text_layout = QVBoxLayout()
@@ -328,7 +335,7 @@ class HomePage(QWidget):
         unrec_layout.setContentsMargins(12, 10, 12, 10)
         unrec_layout.setSpacing(8)
 
-        unrec_msg = QLabel("⚠️ Couldn't recognize this link format. Choose a platform to try anyway:")
+        unrec_msg = QLabel("Couldn't recognize this link format. Choose a platform to try anyway:")
         unrec_msg.setFont(QFont("Segoe UI", 9))
         unrec_layout.addWidget(unrec_msg)
 
@@ -336,12 +343,13 @@ class HomePage(QWidget):
         btns_row.setSpacing(8)
 
         platforms_data = [
-            ("▶️ YouTube", SECTION_YOUTUBE_VIDEO.id),
-            ("📸 Instagram", SECTION_INSTAGRAM_REEL.id),
-            ("📘 Facebook", SECTION_FACEBOOK_VIDEO.id),
+            ("YouTube", "youtube", "youtube"),
+            ("Instagram", "instagram", "instagram"),
+            ("Facebook", "facebook", "facebook"),
         ]
-        for p_name, p_sec in platforms_data:
-            p_btn = QPushButton(p_name)
+        for p_name, p_icon, p_sec in platforms_data:
+            p_btn = QPushButton(f"  {p_name}")
+            p_btn.setIcon(get_svg_icon(p_icon, color="#FFFFFF", size=14))
             p_btn.setFont(QFont("Segoe UI", 9))
             p_btn.setMinimumHeight(30)
             p_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -367,9 +375,9 @@ class HomePage(QWidget):
         tiles_grid.setSpacing(10)
 
         tiles_info = [
-            ("YouTube", "▶️", "Videos, Shorts & Clips", "#E63946", SECTION_YOUTUBE_VIDEO.id),
-            ("Instagram", "📸", "Reels, Posts, Stories & Carousels", "#E1306C", SECTION_INSTAGRAM_REEL.id),
-            ("Facebook", "📘", "Watch, Reels, Page Videos & Shares", "#1877F2", SECTION_FACEBOOK_VIDEO.id),
+            ("YouTube", "youtube", "Videos, Shorts & Clips", "#FF5542", "youtube"),
+            ("Instagram", "instagram", "Reels, Posts, Stories & Carousels", "#E1306C", "instagram"),
+            ("Facebook", "facebook", "Watch, Reels, Page Videos & Shares", "#1877F2", "facebook"),
         ]
 
         self._tile_cards.clear()
@@ -393,7 +401,8 @@ class HomePage(QWidget):
         recent_header_row.addWidget(self._recent_header)
         recent_header_row.addStretch()
 
-        refresh_btn = QPushButton("🔄 Refresh")
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setIcon(get_svg_icon("refresh", color="#9DA3B4", size=12))
         refresh_btn.setFont(QFont("Segoe UI", 8))
         refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         refresh_btn.clicked.connect(self.refresh_recent_downloads)
@@ -449,11 +458,12 @@ class HomePage(QWidget):
 
         self._unrecognized_box.hide()
         target_sec, desc = route_url_to_section(url)
+        dest_id = "youtube" if target_sec.platform_id == "youtube" else ("instagram" if target_sec.platform_id == "instagram" else ("facebook" if target_sec.platform_id == "facebook" else target_sec.id))
 
-        self._chip_lbl.setText(f"✓ Detected: {desc} — Opening section...")
+        self._chip_lbl.setText(f"Detected: {desc} — Opening...")
         self._chip_lbl.show()
 
-        QTimer.singleShot(250, lambda: self._emit_route(target_sec.id, url))
+        QTimer.singleShot(250, lambda: self._emit_route(dest_id, url))
 
     def _emit_route(self, section_id: str, url: str) -> None:
         self._chip_lbl.hide()

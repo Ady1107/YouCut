@@ -4,8 +4,10 @@ YouCut — Queue panel widget.
 Displays the download queue as a scrollable list of QueueItemWidgets,
 with controls for starting, stopping, and clearing the queue.
 """
-
 from __future__ import annotations
+
+from clipgrab.gui.icons import get_svg_icon
+
 
 from typing import Optional
 
@@ -17,6 +19,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -53,14 +56,26 @@ class QueuePanel(QWidget):
         self._connect_signals()
 
     def _setup_ui(self) -> None:
-        """Set up the queue panel UI."""
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
+        """Set up the queue panel UI with responsive container sizing."""
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Centered container capped at 1320px for big screens
+        center_row = QHBoxLayout()
+        center_row.setContentsMargins(0, 0, 0, 0)
+        center_row.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+
+        container = QWidget()
+        container.setMaximumWidth(1320)
+        container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
         # Header with controls
         header = QHBoxLayout()
 
-        title = QLabel("📋 Download Queue")
+        title = QLabel("Download Queue")
         title.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
         header.addWidget(title)
 
@@ -77,30 +92,44 @@ class QueuePanel(QWidget):
         controls = QHBoxLayout()
         controls.setSpacing(8)
 
-        self._start_btn = QPushButton("▶ Start Queue")
-        self._start_btn.setMinimumHeight(34)
+        self._start_btn = QPushButton("Start Queue")
+        self._start_btn.setIcon(get_svg_icon("play", color="#FF5542", size=14))
+        self._start_btn.setFixedHeight(34)
+        self._start_btn.setMinimumWidth(110)
+        self._start_btn.setMaximumWidth(150)
         self._start_btn.setFont(QFont("Segoe UI", 10))
         self._start_btn.clicked.connect(self._on_start_clicked)
         controls.addWidget(self._start_btn)
 
-        self._stop_btn = QPushButton("⏸ Stop")
-        self._stop_btn.setMinimumHeight(34)
+        self._stop_btn = QPushButton("Stop")
+        self._stop_btn.setIcon(get_svg_icon("pause", color="#9DA3B4", size=14))
+        self._stop_btn.setFixedHeight(34)
+        self._stop_btn.setMinimumWidth(80)
+        self._stop_btn.setMaximumWidth(120)
         self._stop_btn.setFont(QFont("Segoe UI", 10))
         self._stop_btn.setEnabled(False)
         self._stop_btn.clicked.connect(self._on_stop_clicked)
         controls.addWidget(self._stop_btn)
 
-        self._clear_btn = QPushButton("🗑 Clear Completed")
-        self._clear_btn.setMinimumHeight(34)
+        self._clear_btn = QPushButton("Clear Completed")
+        self._clear_btn.setIcon(get_svg_icon("trash", color="#9DA3B4", size=14))
+        self._clear_btn.setFixedHeight(34)
+        self._clear_btn.setMinimumWidth(130)
+        self._clear_btn.setMaximumWidth(170)
         self._clear_btn.setFont(QFont("Segoe UI", 10))
         self._clear_btn.clicked.connect(self._on_clear_clicked)
         controls.addWidget(self._clear_btn)
 
-        self._cancel_all_btn = QPushButton("✗ Cancel All")
-        self._cancel_all_btn.setMinimumHeight(34)
+        self._cancel_all_btn = QPushButton("Cancel All")
+        self._cancel_all_btn.setIcon(get_svg_icon("x", color="#9DA3B4", size=14))
+        self._cancel_all_btn.setFixedHeight(34)
+        self._cancel_all_btn.setMinimumWidth(110)
+        self._cancel_all_btn.setMaximumWidth(150)
         self._cancel_all_btn.setFont(QFont("Segoe UI", 10))
         self._cancel_all_btn.clicked.connect(self._on_cancel_all_clicked)
         controls.addWidget(self._cancel_all_btn)
+
+        controls.addStretch(1)
 
         layout.addLayout(controls)
 
@@ -124,6 +153,9 @@ class QueuePanel(QWidget):
 
         scroll.setWidget(self._list_container)
         layout.addWidget(scroll, stretch=1)
+
+        center_row.addWidget(container)
+        outer_layout.addLayout(center_row)
 
     def _connect_signals(self) -> None:
         """Connect queue manager signals."""

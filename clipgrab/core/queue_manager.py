@@ -58,9 +58,24 @@ class QueueItem:
     eta: str = ""
     status_text: str = ""
     platform_id: str = "youtube"  # matches PlatformConfig.id; used for queue/history badges
+    download_type: str = "VIDEO + AUDIO"  # "AUDIO ONLY", "VIDEO + AUDIO", "VIDEO ONLY", "GIF"
 
     # The actual download request (set when building the job)
     download_request: Optional[DownloadRequest] = None
+
+    def get_download_type_display(self) -> str:
+        """Return the normalized download type marker (AUDIO ONLY, VIDEO + AUDIO, VIDEO ONLY, GIF)."""
+        if self.download_type:
+            return self.download_type
+        if self.download_request:
+            if getattr(self.download_request, "convert_to_gif", False):
+                return "GIF"
+            if self.download_request.audio_only:
+                return "AUDIO ONLY"
+            if self.download_request.video_format and not self.download_request.audio_format:
+                return "VIDEO ONLY"
+            return "VIDEO + AUDIO"
+        return "VIDEO + AUDIO"
 
 
 class QueueManager(QObject):

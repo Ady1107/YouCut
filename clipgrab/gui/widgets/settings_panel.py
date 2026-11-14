@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -64,12 +65,23 @@ class SettingsPanel(QWidget):
         self._load_from_settings()
 
     def _setup_ui(self) -> None:
-        """Set up the settings panel UI."""
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
+        """Set up the settings panel UI wrapped in a responsive QScrollArea."""
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        content_widget = QWidget()
+        layout = QVBoxLayout(content_widget)
+        layout.setContentsMargins(20, 16, 20, 16)
         layout.setSpacing(16)
 
-        title = QLabel("⚙️ Settings")
+        title = QLabel("Settings")
         title.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
         title.setStyleSheet("color: #E63946; margin-bottom: 4px;")
         layout.addWidget(title)
@@ -88,7 +100,7 @@ class SettingsPanel(QWidget):
         banner_layout.setSpacing(6)
 
         banner_title_row = QHBoxLayout()
-        self._banner_title = QLabel("🚀  YouCut Update Available!")
+        self._banner_title = QLabel("YouCut Update Available!")
         self._banner_title.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
         self._banner_title.setStyleSheet("color: #E63946;")
         banner_title_row.addWidget(self._banner_title)
@@ -106,7 +118,7 @@ class SettingsPanel(QWidget):
         self._banner_notes.setWordWrap(True)
         banner_layout.addWidget(self._banner_notes)
 
-        self._banner_download_btn = QPushButton("⬇️  Download YouCut Update")
+        self._banner_download_btn = QPushButton("Download YouCut Update")
         self._banner_download_btn.setMinimumHeight(34)
         self._banner_download_btn.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         self._banner_download_btn.setStyleSheet(
@@ -140,6 +152,7 @@ class SettingsPanel(QWidget):
 
         appearance_layout.addLayout(theme_row)
         layout.addWidget(appearance_group)
+        appearance_group.hide()  # Per Decision 1: Dark theme only until redesigned
 
         # ── Downloads ─────────────────────────────────────────────────────
         downloads_group = QGroupBox("Downloads")
@@ -156,7 +169,7 @@ class SettingsPanel(QWidget):
         self._folder_input.setFont(QFont("Segoe UI", 9))
         folder_row.addWidget(self._folder_input, stretch=1)
 
-        browse_btn = QPushButton("📁 Browse")
+        browse_btn = QPushButton("Browse")
         browse_btn.setMinimumHeight(32)
         browse_btn.clicked.connect(self._on_browse_folder)
         folder_row.addWidget(browse_btn)
@@ -196,7 +209,75 @@ class SettingsPanel(QWidget):
         format_row.addStretch()
 
         downloads_layout.addLayout(format_row)
+
+        # Default trim mode setting
+        trim_row = QHBoxLayout()
+        trim_label = QLabel("Default trim mode:")
+        trim_label.setFont(QFont("Segoe UI", 10))
+        trim_label.setToolTip("Default cut precision for clip trimming.")
+        trim_row.addWidget(trim_label)
+
+        self._trim_mode_combo = QComboBox()
+        self._trim_mode_combo.addItems(["Auto (recommended)", "Exact (frame-accurate)", "Fast (keyframe cut)"])
+        self._trim_mode_combo.setMinimumHeight(32)
+        self._trim_mode_combo.setFont(QFont("Segoe UI", 9))
+        self._trim_mode_combo.currentTextChanged.connect(self._on_default_trim_mode_changed)
+        trim_row.addWidget(self._trim_mode_combo)
+        trim_row.addStretch()
+        downloads_layout.addLayout(trim_row)
+
         layout.addWidget(downloads_group)
+
+        # ── Age-Restricted & Authentication ──────────────────────────────
+        auth_group = QGroupBox("Age-Restricted Video & Authentication")
+        auth_layout = QVBoxLayout(auth_group)
+
+        auth_intro = QLabel(
+            "Access age-restricted, private, or member-only videos by authenticating through your browser or a cookies file."
+        )
+        auth_intro.setFont(QFont("Segoe UI", 9))
+        auth_intro.setStyleSheet("color: rgba(235, 235, 245, 0.6);")
+        auth_intro.setWordWrap(True)
+        auth_layout.addWidget(auth_intro)
+
+        browser_row = QHBoxLayout()
+        browser_label = QLabel("Browser for cookies:")
+        browser_label.setFont(QFont("Segoe UI", 10))
+        browser_row.addWidget(browser_label)
+
+        self._browser_combo = QComboBox()
+        self._browser_combo.addItems(["None", "chrome", "firefox", "edge", "brave", "opera", "chromium", "vivaldi"])
+        self._browser_combo.setMinimumHeight(32)
+        self._browser_combo.setFont(QFont("Segoe UI", 9))
+        self._browser_combo.currentTextChanged.connect(self._on_browser_changed)
+        browser_row.addWidget(self._browser_combo)
+        browser_row.addStretch()
+        auth_layout.addLayout(browser_row)
+
+        cookie_row = QHBoxLayout()
+        cookie_label = QLabel("Or cookies.txt file:")
+        cookie_label.setFont(QFont("Segoe UI", 10))
+        cookie_row.addWidget(cookie_label)
+
+        self._cookie_file_input = QLineEdit()
+        self._cookie_file_input.setPlaceholderText("Select cookies.txt (optional)...")
+        self._cookie_file_input.setReadOnly(True)
+        self._cookie_file_input.setMinimumHeight(32)
+        self._cookie_file_input.setFont(QFont("Segoe UI", 9))
+        cookie_row.addWidget(self._cookie_file_input, stretch=1)
+
+        browse_cookie_btn = QPushButton("Browse")
+        browse_cookie_btn.setMinimumHeight(32)
+        browse_cookie_btn.clicked.connect(self._on_browse_cookies)
+        cookie_row.addWidget(browse_cookie_btn)
+
+        clear_cookie_btn = QPushButton("Clear")
+        clear_cookie_btn.setMinimumHeight(32)
+        clear_cookie_btn.clicked.connect(self._on_clear_cookies)
+        cookie_row.addWidget(clear_cookie_btn)
+
+        auth_layout.addLayout(cookie_row)
+        layout.addWidget(auth_group)
 
         # ── Updates ───────────────────────────────────────────────────────
         updates_group = QGroupBox("Software & Component Updates")
@@ -216,7 +297,7 @@ class SettingsPanel(QWidget):
         updates_layout.addWidget(self._notify_label)
 
         check_row = QHBoxLayout()
-        self._check_update_btn = QPushButton("🔍 Check for Updates Now")
+        self._check_update_btn = QPushButton("Check for Updates Now")
         self._check_update_btn.setMinimumHeight(34)
         self._check_update_btn.setFont(QFont("Segoe UI", 10))
         self._check_update_btn.clicked.connect(self._on_check_update)
@@ -243,7 +324,7 @@ class SettingsPanel(QWidget):
         versions_layout.addWidget(self._ffmpeg_version_label)
 
         diag_row = QHBoxLayout()
-        self._copy_diag_btn = QPushButton("📋 Copy Diagnostics")
+        self._copy_diag_btn = QPushButton("Copy Diagnostics")
         self._copy_diag_btn.setMinimumHeight(34)
         self._copy_diag_btn.setFont(QFont("Segoe UI", 10))
         self._copy_diag_btn.setToolTip("Copy app/yt-dlp/ffmpeg versions, last command, and recent logs (redacted) to clipboard")
@@ -256,11 +337,14 @@ class SettingsPanel(QWidget):
         layout.addStretch()
 
         # ── Credits ───────────────────────────────────────────────────────
-        credit_label = QLabel("Made with ❤️ by sHUBH")
+        credit_label = QLabel("Made by sHUBH")
         credit_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Medium))
         credit_label.setStyleSheet("color: rgba(235, 235, 245, 0.35);")
         credit_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
         layout.addWidget(credit_label)
+
+        scroll.setWidget(content_widget)
+        root_layout.addWidget(scroll)
 
     def _load_from_settings(self) -> None:
         """Load current values from AppSettings."""
@@ -279,6 +363,44 @@ class SettingsPanel(QWidget):
             self._format_combo.setCurrentIndex(idx)
         else:
             self._format_combo.setCurrentText("MP4")
+
+        # Age-restricted & authentication cookies
+        cur_browser = getattr(self._settings, "browser_for_cookies", "")
+        b_text = cur_browser.lower() if cur_browser else "None"
+        b_idx = self._browser_combo.findText(b_text, Qt.MatchFlag.MatchFixedString)
+        if b_idx >= 0:
+            self._browser_combo.setCurrentIndex(b_idx)
+        else:
+            self._browser_combo.setCurrentText(b_text)
+        self._cookie_file_input.setText(getattr(self._settings, "cookies_file_path", ""))
+
+    def _on_browser_changed(self, text: str) -> None:
+        val = "" if text == "None" else text.lower()
+        self._settings.update(browser_for_cookies=val)
+        self.settings_changed.emit()
+
+    def _on_browse_cookies(self) -> None:
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Cookies File",
+            "",
+            "Cookies Files (*.txt *.cookies);;All Files (*.*)",
+        )
+        if file_path:
+            self._cookie_file_input.setText(file_path)
+            self._settings.update(cookies_file_path=file_path)
+            self.settings_changed.emit()
+
+    def _on_clear_cookies(self) -> None:
+        self._cookie_file_input.clear()
+        self._settings.update(cookies_file_path="")
+        self.settings_changed.emit()
+
+    def _on_default_trim_mode_changed(self, text: str) -> None:
+        mode_map = {"Auto (recommended)": "auto", "Exact (frame-accurate)": "exact", "Fast (keyframe cut)": "fast"}
+        mode = mode_map.get(text, "auto")
+        self._settings.update(default_trim_mode=mode)
+        self.settings_changed.emit()
 
     def _on_default_format_changed(self, text: str) -> None:
         """Handle default video container format change."""

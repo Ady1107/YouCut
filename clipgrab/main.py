@@ -55,6 +55,21 @@ def main() -> int:
     setup_logging()
     logger.info("YouCut starting (single-instance lock acquired)...")
 
+    # Install global excepthook to prevent Qt slot exceptions from being swallowed silently
+    def _global_excepthook(exc_type, exc_value, exc_traceback):
+        import traceback
+        err_msg = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+        logger.error("Uncaught exception in Qt thread/slot:\n%s", err_msg)
+        try:
+            from clipgrab.gui.widgets.toast_notification import show_toast
+            win = QApplication.activeWindow()
+            if win:
+                show_toast(win, f"Error: {exc_value}", toast_type="error")
+        except Exception:
+            pass
+
+    sys.excepthook = _global_excepthook
+
     # Set explicit AppUserModelID on Windows so the taskbar displays the app icon
     # instead of the generic/default paper icon or python icon
     if sys.platform == "win32":

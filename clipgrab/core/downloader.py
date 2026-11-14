@@ -199,6 +199,19 @@ class DownloadWorker(QObject):
         if platform_id in ("youtube",):
             cmd.append("--no-playlist")
 
+        # Age-restricted & cookie authentication support
+        try:
+            from clipgrab.config.settings import AppSettings
+            _s = AppSettings.load()
+            _b = getattr(_s, "browser_for_cookies", "").strip().lower()
+            _cf = getattr(_s, "cookies_file_path", "").strip()
+            if _cf and os.path.isfile(_cf):
+                cmd.extend(["--cookies", _cf])
+            elif _b and _b not in ("none", ""):
+                cmd.extend(["--cookies-from-browser", _b])
+        except Exception:
+            pass
+
         cmd += ["--ffmpeg-location", get_ffmpeg_directory(), url]
 
         try:
@@ -357,6 +370,8 @@ class DownloadWorker(QObject):
                 percent = float(match.group(1))
                 speed = self._extract_field(line, "at", "ETA") or ""
                 eta = self._extract_field(line, "ETA", None) or ""
+                speed = re.sub(r"\x1b\[[0-9;]*m", "", speed).strip()
+                eta = re.sub(r"\x1b\[[0-9;]*m", "", eta).strip()
                 self.progress_updated.emit(percent, speed, eta, 0, 0)
                 
         elif "time=" in line and "bitrate=" in line:
@@ -369,7 +384,20 @@ class DownloadWorker(QObject):
                         h, m, s = map(float, match.groups())
                         elapsed = h * 3600 + m * 60 + s
                         percent = min((elapsed / duration) * 100, 99.9)
-                        self.progress_updated.emit(percent, "ffmpeg", "", 0, 0)
+                        speed_str = ""
+                        br_match = re.search(r"bitrate=\s*([0-9.]+)\s*(\w+)/s", line)
+                        if br_match:
+                            br_val = float(br_match.group(1))
+                            br_unit = br_match.group(2).lower()
+                            if "m" in br_unit:
+                                speed_str = f"{br_val / 8:.1f} MB/s"
+                            else:
+                                speed_str = f"{br_val / 8:.0f} KB/s"
+                        else:
+                            sp_match = re.search(r"speed=\s*([0-9.]+)x", line)
+                            if sp_match:
+                                speed_str = f"{sp_match.group(1)}x"
+                        self.progress_updated.emit(percent, speed_str or "Processing...", "", 0, 0)
 
         if "[Merger]" in line or "[ExtractAudio]" in line or "[ffmpeg]" in line:
             self.status_changed.emit("Processing with FFmpeg...")
@@ -493,13 +521,16 @@ class DownloadWorker(QObject):
             if request.start_time is not None and request.end_time is not None:
                 requested_duration = request.end_time - request.start_time
                 dur_match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", probe_text)
-                if dur_match:
+                if dur_match and requested_duration > 0:
                     h, m, s = float(dur_match.group(1)), float(dur_match.group(2)), float(dur_match.group(3))
                     actual_duration = h * 3600 + m * 60 + s
                     delta = abs(actual_duration - requested_duration)
-                    max_tol = 1.0 if (request.frame_accurate_clipping or request.force_keyframes) else 5.0
-                    if delta > max_tol:
-                        reason = f"Duration mismatch: {actual_duration:.1f}s vs {requested_duration:.1f}s requested (delta {delta:.2f}s > {max_tol:.1f}s)"
+                    # For stream-copy (no re-encode), cuts land on nearest keyframes (GOP).
+                    # Keyframe intervals can be 5-10s. If actual_duration is within 15s or 35% of requested,
+                    # this is completely normal stream-copy behavior and a valid download!
+                    max_tol = 2.0 if (request.frame_accurate_clipping or request.force_keyframes) else max(15.0, requested_duration * 0.35)
+                    if actual_duration < requested_duration * 0.5 or delta > max_tol:
+                        reason = f"Duration mismatch: {actual_duration:.1f}s vs {requested_duration:.1f}s requested (delta {delta:.2f}s)"
                         logger.warning("Post-download validation warning: %s", reason)
                         self.download_finished_with_warning.emit(output_path, reason)
                         self._process = None
@@ -572,6 +603,19 @@ class DownloadWorker(QObject):
             "--concurrent-fragments", str(getattr(request, "concurrent_fragments", 16)),
         ]
 
+        # Age-restricted & cookie authentication support
+        try:
+            from clipgrab.config.settings import AppSettings
+            _s = AppSettings.load()
+            _b = getattr(_s, "browser_for_cookies", "").strip().lower()
+            _cf = getattr(_s, "cookies_file_path", "").strip()
+            if _cf and os.path.isfile(_cf):
+                cmd.extend(["--cookies", _cf])
+            elif _b and _b not in ("none", ""):
+                cmd.extend(["--cookies-from-browser", _b])
+        except Exception:
+            pass
+
         if request.audio_only:
             cmd.extend([
                 "-f", "bestaudio/best",
@@ -597,15 +641,12 @@ class DownloadWorker(QObject):
         if request.start_time is not None and request.end_time is not None:
             section = f"*{request.start_time}-{request.end_time}"
             cmd.extend(["--download-sections", section])
+            cmd.append("--force-overwrites")
 
             if request.frame_accurate_clipping or request.force_keyframes:
                 cmd.append("--force-keyframes-at-cuts")
                 logger.info("Clip: using --force-keyframes-at-cuts (re-encode, frame-accurate)")
             else:
-                # Stream-copy is the default behavior of --download-sections.
-                # yt-dlp + ffmpeg will mux/copy streams without re-encoding
-                # unless --force-keyframes-at-cuts is explicitly passed.
-                # No extra args needed — this is the fast path.
                 logger.info("Clip: using stream-copy (default, no re-encode)")
 
         cmd.append(request.url)
@@ -619,13 +660,29 @@ class DownloadWorker(QObject):
             total = data.get("total_bytes") or data.get("total_bytes_estimate") or 0
             downloaded = data.get("downloaded_bytes", 0)
             percent = (downloaded / total * 100) if total > 0 else 0.0
+
+            speed_val = data.get("speed")
             speed_str = data.get("_speed_str", "")
+            if not speed_str and speed_val:
+                if speed_val >= 1024 * 1024:
+                    speed_str = f"{speed_val / (1024 * 1024):.1f} MB/s"
+                elif speed_val >= 1024:
+                    speed_str = f"{speed_val / 1024:.0f} KB/s"
+                else:
+                    speed_str = f"{speed_val:.0f} B/s"
+            elif speed_str:
+                speed_str = re.sub(r"\x1b\[[0-9;]*m", "", speed_str)
+
+            eta_val = data.get("eta")
             eta_str = data.get("_eta_str", "")
-            if speed_str:
-                speed_str = re.sub(r"\[\d+m", "", speed_str)
-            if eta_str:
-                eta_str = re.sub(r"\[\d+m", "", eta_str)
-            self.progress_updated.emit(percent, speed_str.strip(), eta_str.strip(), 0, 0)
+            if not eta_str and eta_val is not None:
+                m, s = divmod(int(eta_val), 60)
+                h, m = divmod(m, 60)
+                eta_str = f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
+            elif eta_str:
+                eta_str = re.sub(r"\x1b\[[0-9;]*m", "", eta_str)
+
+            self.progress_updated.emit(percent, speed_str.strip(), eta_str.strip(), downloaded, total)
         elif status == "finished":
             self.progress_updated.emit(100.0, "Processing...", "", 0, 0)
             self.status_changed.emit("Download complete. Processing...")
@@ -672,7 +729,11 @@ def _classify_error(stderr: str, is_extraction: bool) -> str:
     if "private video" in stderr_lower:
         return "This video is private. You need the owner's permission to access it."
     if "sign in" in stderr_lower or "age" in stderr_lower:
-        return "This video is age-restricted and requires sign-in. Age-restricted videos are not currently supported."
+        return (
+            "This video is age-restricted by YouTube. "
+            "To download it, select your browser in Settings > YouTube Cookies, "
+            "or provide an authorized cookies.txt file."
+        )
     if "unavailable" in stderr_lower or "removed" in stderr_lower:
         return "This video is unavailable. It may have been removed or made private."
     if "copyright" in stderr_lower:

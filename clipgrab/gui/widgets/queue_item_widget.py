@@ -91,7 +91,15 @@ class QueueItemWidget(QFrame):
         info_col.addWidget(self._title_label)
 
         details_row = QHBoxLayout()
-        details_row.setSpacing(12)
+        details_row.setSpacing(10)
+
+        self._type_badge = QLabel("VIDEO + AUDIO")
+        self._type_badge.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        self._type_badge.setStyleSheet(
+            "background: rgba(59, 130, 246, 0.15); color: #60A5FA; "
+            "border: 1px solid rgba(59, 130, 246, 0.35); border-radius: 4px; padding: 1px 6px; font-size: 10px;"
+        )
+        details_row.addWidget(self._type_badge)
 
         self._time_label = QLabel("")
         self._time_label.setFont(QFont("Segoe UI", 9))
@@ -138,7 +146,7 @@ class QueueItemWidget(QFrame):
         self._status_label = QLabel("⏳ Pending")
         self._status_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         self._status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._status_label.setFixedWidth(100)
+        self._status_label.setMinimumWidth(120)
         actions_col.addWidget(self._status_label)
 
         # Action buttons
@@ -183,6 +191,31 @@ class QueueItemWidget(QFrame):
         self._item_id = item.id
         self._title_label.setText(item.title or "Untitled")
 
+        # Download Type Marker (AUDIO ONLY, VIDEO + AUDIO, VIDEO ONLY, GIF)
+        dtype = item.get_download_type_display().upper() if hasattr(item, "get_download_type_display") else (getattr(item, "download_type", "") or "VIDEO + AUDIO")
+        self._type_badge.setText(dtype)
+        if "AUDIO ONLY" in dtype:
+            self._type_badge.setStyleSheet(
+                "background: rgba(16, 185, 129, 0.15); color: #10B981; "
+                "border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
+            )
+        elif "VIDEO ONLY" in dtype:
+            self._type_badge.setStyleSheet(
+                "background: rgba(168, 85, 247, 0.15); color: #C084FC; "
+                "border: 1px solid rgba(168, 85, 247, 0.35); border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
+            )
+        elif "GIF" in dtype:
+            self._type_badge.setStyleSheet(
+                "background: rgba(244, 63, 94, 0.15); color: #FB7185; "
+                "border: 1px solid rgba(244, 63, 94, 0.35); border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
+            )
+        else:
+            self._type_badge.setStyleSheet(
+                "background: rgba(59, 130, 246, 0.15); color: #60A5FA; "
+                "border: 1px solid rgba(59, 130, 246, 0.35); border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
+            )
+        self._type_badge.show()
+
         # Time range
         if item.start_time and item.end_time:
             self._time_label.setText(f"⏱ {item.start_time} → {item.end_time}")
@@ -217,20 +250,35 @@ class QueueItemWidget(QFrame):
             else:
                 self._progress_bar.setRange(0, 100)  # Normal percentage mode
                 self._progress_bar.setValue(int(item.progress))
+                self._progress_bar.setFormat(f"%p%  •  {dtype}")
             self._stats_label.show()
-            # Show status text (e.g. "Fetching video info...") when no speed/eta available
-            if item.status_text and not item.speed:
+            stats_parts = []
+            if item.speed:
+                stats_parts.append(f"Speed: {item.speed}")
+            if item.eta:
+                stats_parts.append(f"ETA: {item.eta}")
+            if stats_parts:
+                self._stats_label.setText("  •  ".join(stats_parts))
+            elif item.status_text:
                 self._stats_label.setText(item.status_text)
             else:
-                stats_parts = []
-                if item.speed:
-                    stats_parts.append(f"Speed: {item.speed}")
-                if item.eta:
-                    stats_parts.append(f"ETA: {item.eta}")
-                self._stats_label.setText(" | ".join(stats_parts) if stats_parts else "")
+                self._stats_label.setText("Downloading...")
             self._cancel_btn.show()
             self._retry_btn.hide()
             self._remove_btn.hide()
+        elif item.status in (QueueItemStatus.DONE, QueueItemStatus.WARNING):
+            self._progress_bar.show()
+            self._progress_bar.setRange(0, 100)
+            self._progress_bar.setValue(100)
+            self._progress_bar.setFormat(f"100%  •  {dtype}")
+            self._stats_label.show()
+            if item.status == QueueItemStatus.WARNING and item.warning_reason:
+                self._stats_label.setText(f"Warning: {item.warning_reason}")
+                self._stats_label.setStyleSheet("color: #F77F00;")
+            else:
+                self._stats_label.setText("Completed")
+                self._stats_label.setStyleSheet("color: #10B981;")
+            self._cancel_btn.hide()
         else:
             self._progress_bar.hide()
             self._stats_label.hide()
@@ -253,12 +301,15 @@ class QueueItemWidget(QFrame):
             self._resume_btn.hide()
             self._open_location_btn.hide()
         elif item.status == QueueItemStatus.WARNING:
-            self._progress_bar.setVisible(True)
-            self._progress_bar.setValue(100)
-            self._details_label.setText(f"Finished with warning: {item.warning_reason}" if item.warning_reason else "Finished with warning")
-            self._details_label.setStyleSheet("color: #F77F00;")
-            self._cancel_btn.setVisible(False)
-            self._open_btn.setVisible(bool(item.output_path))
+            self._progress_bar.setVisible(False)
+            self._stats_label.show()
+            self._stats_label.setText(f"Warning: {item.warning_reason}" if item.warning_reason else "Completed with warnings")
+            self._stats_label.setStyleSheet("color: #F77F00;")
+            self._cancel_btn.hide()
+            self._retry_btn.hide()
+            self._remove_btn.show()
+            self._resume_btn.hide()
+            self._open_location_btn.setVisible(bool(item.output_path))
         elif item.status == QueueItemStatus.DONE:
             self._remove_btn.show()
             self._retry_btn.hide()

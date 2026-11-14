@@ -4,8 +4,10 @@ YouCut — History panel widget.
 Displays download history with search/filter, scrollable list,
 and per-entry actions (open location, re-download, remove).
 """
-
 from __future__ import annotations
+
+from clipgrab.gui.icons import get_svg_icon
+
 
 from typing import Optional
 
@@ -17,6 +19,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -51,14 +54,26 @@ class HistoryPanel(QWidget):
         self._setup_ui()
 
     def _setup_ui(self) -> None:
-        """Set up the history panel UI."""
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
+        """Set up the history panel UI with responsive container sizing."""
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Centered container capped at 1320px for big screens
+        center_row = QHBoxLayout()
+        center_row.setContentsMargins(0, 0, 0, 0)
+        center_row.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+
+        container = QWidget()
+        container.setMaximumWidth(1320)
+        container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
         # Header
         header = QHBoxLayout()
 
-        title = QLabel("📜 Download History")
+        title = QLabel("Download History")
         title.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
         header.addWidget(title)
 
@@ -75,14 +90,16 @@ class HistoryPanel(QWidget):
         search_row = QHBoxLayout()
 
         self._search_input = QLineEdit()
-        self._search_input.setPlaceholderText("🔍 Search by title...")
-        self._search_input.setMinimumHeight(34)
+        self._search_input.setPlaceholderText("Search by title...")
+        self._search_input.setFixedHeight(36)
         self._search_input.setFont(QFont("Segoe UI", 10))
         self._search_input.textChanged.connect(self._on_search)
         search_row.addWidget(self._search_input)
 
-        self._refresh_btn = QPushButton("🔄 Refresh")
-        self._refresh_btn.setMinimumHeight(34)
+        self._refresh_btn = QPushButton("Refresh")
+        self._refresh_btn.setIcon(get_svg_icon("refresh", color="#9DA3B4", size=14))
+        self._refresh_btn.setFixedHeight(36)
+        self._refresh_btn.setMinimumWidth(90)
         self._refresh_btn.clicked.connect(self.refresh)
         search_row.addWidget(self._refresh_btn)
 
@@ -110,6 +127,9 @@ class HistoryPanel(QWidget):
 
         scroll.setWidget(self._list_container)
         layout.addWidget(scroll, stretch=1)
+
+        center_row.addWidget(container)
+        outer_layout.addLayout(center_row)
 
     def refresh(self) -> None:
         """Reload the history list from the database."""
