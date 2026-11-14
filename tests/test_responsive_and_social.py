@@ -221,6 +221,149 @@ class TestResponsiveAndSocial(unittest.TestCase):
             self.assertTrue(fb._watchdog_timer.isActive())
             fb.shutdown()
 
+    def test_url_cleaner_and_sanitization(self) -> None:
+        """Verify tracking and referral parameters are stripped from media URLs."""
+        from clipgrab.core.validator import clean_media_url
+
+        dirty_ig = "https://www.instagram.com/p/DDXYZ123/?utm_source=ig_web_copy_link&igsh=MzRlODBiNWFlZA==&sh=MzRlODBiNWFlZA=="
+        clean_ig = clean_media_url(dirty_ig)
+        self.assertNotIn("utm_source", clean_ig)
+        self.assertNotIn("igsh", clean_ig)
+        self.assertEqual(clean_ig, "https://www.instagram.com/p/DDXYZ123/")
+
+        dirty_fb = "https://www.facebook.com/share/p/1HW55KMuJv/?mibextid=wwXIfr&fbclid=IwAR123"
+        clean_fb = clean_media_url(dirty_fb)
+        self.assertNotIn("mibextid", clean_fb)
+        self.assertNotIn("fbclid", clean_fb)
+        self.assertEqual(clean_fb, "https://www.facebook.com/share/p/1HW55KMuJv/")
+
+    def test_queue_markers_and_highlighting(self) -> None:
+        """Verify QueueItemWidget shows platform marker badges and applies orange/green styling."""
+        from clipgrab.core.queue_manager import QueueItem, QueueItemStatus
+        from clipgrab.gui.widgets.queue_item_widget import (
+            QueueItemWidget,
+            _STYLE_CARD_DOWNLOADING,
+            _STYLE_CARD_DONE,
+            _PROGRESS_STYLE_ORANGE,
+            _PROGRESS_STYLE_GREEN,
+        )
+
+        # 1. Instagram item in DOWNLOADING state
+        ig_item = QueueItem(
+            id="item-1",
+            url="https://www.instagram.com/reel/C123/",
+            title="IG Reel",
+            download_type="video_audio",
+            status=QueueItemStatus.DOWNLOADING,
+            progress=45.0,
+            speed="2.5 MB/s",
+        )
+        ig_widget = QueueItemWidget(ig_item)
+        self.assertEqual(ig_widget._platform_badge.text(), "INSTAGRAM")
+        self.assertEqual(ig_widget._type_badge.text(), "VIDEO + AUDIO")
+        self.assertEqual(ig_widget.styleSheet(), _STYLE_CARD_DOWNLOADING)
+        self.assertEqual(ig_widget._progress_bar.styleSheet(), _PROGRESS_STYLE_ORANGE)
+        self.assertIn("Downloading", ig_widget._status_label.text())
+
+        # 2. Facebook item in DONE state
+        fb_item = QueueItem(
+            id="item-2",
+            url="https://www.facebook.com/watch/?v=123",
+            title="FB Video",
+            download_type="audio_only",
+            status=QueueItemStatus.DONE,
+            progress=100.0,
+        )
+        fb_widget = QueueItemWidget(fb_item)
+        self.assertEqual(fb_widget._platform_badge.text(), "FACEBOOK")
+        self.assertEqual(fb_widget._type_badge.text(), "AUDIO ONLY")
+        self.assertEqual(fb_widget.styleSheet(), _STYLE_CARD_DONE)
+        self.assertEqual(fb_widget._progress_bar.styleSheet(), _PROGRESS_STYLE_GREEN)
+        self.assertIn("Done", fb_widget._status_label.text())
+
+        # 3. YouTube item in WARNING state (completed with post-processing warn)
+        yt_item = QueueItem(
+            id="item-3",
+            url="https://youtube.com/watch?v=abc",
+            title="YT Clip",
+            download_type="video_audio",
+            status=QueueItemStatus.WARNING,
+            progress=100.0,
+        )
+        yt_widget = QueueItemWidget(yt_item)
+        self.assertEqual(yt_widget._platform_badge.text(), "YOUTUBE")
+        self.assertEqual(yt_widget.styleSheet(), _STYLE_CARD_DONE)
+        self.assertEqual(yt_widget._progress_bar.styleSheet(), _PROGRESS_STYLE_GREEN)
+
+    def test_history_markers_and_filtering(self) -> None:
+        """Verify History tab has platform and file type filters and correctly filters entries."""
+        import tempfile
+        from clipgrab.data.history_db import HistoryDB, HistoryEntry
+        from clipgrab.gui.widgets.history_panel import HistoryPanel
+
+        # Use temporary isolated database
+        with tempfile.TemporaryDirectory(prefix="hist_test_") as tmpdir:
+            test_db = HistoryDB(db_path=os.path.join(tmpdir, "test_history.db"))
+            test_db.add_entry(
+                title="YT Tech Video",
+                url="https://youtube.com/watch?v=111",
+                output_path="C:/Downloads/video.mp4",
+                video_quality="1080p",
+            )
+            test_db.add_entry(
+                title="IG Cooking Reel",
+                url="https://www.instagram.com/reel/222/",
+                output_path="C:/Downloads/cooking.mp4",
+                video_quality="720p",
+            )
+            test_db.add_entry(
+                title="FB Podcast Audio",
+                url="https://www.facebook.com/watch/?v=333",
+                output_path="C:/Downloads/podcast.mp3",
+                video_quality="Audio only",
+            )
+            test_db.add_entry(
+                title="Funny Animation Meme",
+                url="https://youtube.com/watch?v=444",
+                output_path="C:/Downloads/meme.gif",
+                video_quality="GIF",
+            )
+
+            panel = HistoryPanel(test_db)
+            panel.show()
+            panel.refresh()
+
+            # Initial state: 4 entries
+            self.assertEqual(len(panel._item_widgets), 4)
+
+            # Filter by Platform: Instagram
+            idx_ig = panel._platform_filter.findData("instagram")
+            panel._platform_filter.setCurrentIndex(idx_ig)
+            self.assertEqual(len(panel._item_widgets), 1)
+            self.assertEqual(panel._item_widgets[0]._platform_badge.text(), "INSTAGRAM")
+            self.assertEqual(panel._item_widgets[0]._title_label.text(), "IG Cooking Reel")
+
+            # Filter by Platform: All, Type: Audio
+            panel._platform_filter.setCurrentIndex(panel._platform_filter.findData("all"))
+            idx_audio = panel._type_filter.findData("audio")
+            panel._type_filter.setCurrentIndex(idx_audio)
+            self.assertEqual(len(panel._item_widgets), 1)
+            self.assertEqual(panel._item_widgets[0]._type_badge.text(), "AUDIO")
+            self.assertEqual(panel._item_widgets[0]._title_label.text(), "FB Podcast Audio")
+
+            # Filter by Type: GIF
+            idx_gif = panel._type_filter.findData("gif")
+            panel._type_filter.setCurrentIndex(idx_gif)
+            self.assertEqual(len(panel._item_widgets), 1)
+            self.assertEqual(panel._item_widgets[0]._type_badge.text(), "GIF")
+            self.assertEqual(panel._item_widgets[0]._title_label.text(), "Funny Animation Meme")
+
+            # Reset filters
+            panel._type_filter.setCurrentIndex(panel._type_filter.findData("all"))
+            self.assertEqual(len(panel._item_widgets), 4)
+
+            panel.close()
+
 
 if __name__ == "__main__":
     unittest.main()

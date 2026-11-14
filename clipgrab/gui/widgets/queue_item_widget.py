@@ -38,6 +38,56 @@ _STATUS_COLORS = {
 }
 
 
+_STYLE_CARD_DOWNLOADING = (
+    "QueueItemWidget { background-color: rgba(245, 158, 11, 0.05); border: 1px solid rgba(245, 158, 11, 0.45); border-radius: 12px; }"
+)
+_STYLE_CARD_DONE = (
+    "QueueItemWidget { background-color: rgba(34, 197, 94, 0.05); border: 1px solid rgba(34, 197, 94, 0.45); border-radius: 12px; }"
+)
+_STYLE_CARD_FAILED = (
+    "QueueItemWidget { background-color: rgba(239, 68, 68, 0.05); border: 1px solid rgba(239, 68, 68, 0.45); border-radius: 12px; }"
+)
+_STYLE_CARD_DEFAULT = (
+    "QueueItemWidget { background-color: #171922; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 12px; }"
+)
+
+_PROGRESS_STYLE_ORANGE = (
+    "QProgressBar {"
+    "  background-color: rgba(18, 20, 28, 0.85);"
+    "  border: 1px solid rgba(245, 158, 11, 0.4);"
+    "  border-radius: 9px;"
+    "  text-align: center;"
+    "  color: #FFFFFF;"
+    "  font-size: 11px;"
+    "  font-weight: 700;"
+    "  min-height: 18px;"
+    "  max-height: 18px;"
+    "}"
+    "QProgressBar::chunk {"
+    "  background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #F59E0B, stop:1 #FB923C);"
+    "  border-radius: 8px;"
+    "}"
+)
+
+_PROGRESS_STYLE_GREEN = (
+    "QProgressBar {"
+    "  background-color: rgba(18, 20, 28, 0.85);"
+    "  border: 1px solid rgba(34, 197, 94, 0.4);"
+    "  border-radius: 9px;"
+    "  text-align: center;"
+    "  color: #FFFFFF;"
+    "  font-size: 11px;"
+    "  font-weight: 700;"
+    "  min-height: 18px;"
+    "  max-height: 18px;"
+    "}"
+    "QProgressBar::chunk {"
+    "  background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #10B981, stop:1 #22C55E);"
+    "  border-radius: 8px;"
+    "}"
+)
+
+
 class QueueItemWidget(QFrame):
     """
     Widget representing a single queue item card.
@@ -91,7 +141,16 @@ class QueueItemWidget(QFrame):
         info_col.addWidget(self._title_label)
 
         details_row = QHBoxLayout()
-        details_row.setSpacing(10)
+        details_row.setSpacing(8)
+
+        # Platform badge (YouTube, Instagram, Facebook, etc.)
+        self._platform_badge = QLabel("YOUTUBE")
+        self._platform_badge.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        self._platform_badge.setStyleSheet(
+            "background: rgba(239, 68, 68, 0.15); color: #EF4444; "
+            "border: 1px solid rgba(239, 68, 68, 0.35); border-radius: 4px; padding: 1px 6px; font-size: 10px;"
+        )
+        details_row.addWidget(self._platform_badge)
 
         self._type_badge = QLabel("VIDEO + AUDIO")
         self._type_badge.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
@@ -191,6 +250,46 @@ class QueueItemWidget(QFrame):
         self._item_id = item.id
         self._title_label.setText(item.title or "Untitled")
 
+        # ── Platform marker badge ─────────────────────────────────────────────
+        plat_id = (getattr(item, "platform_id", "") or "").lower()
+        if (not plat_id or plat_id == "youtube") and item.url:
+            from clipgrab.core.platforms import detect_platform
+            p = detect_platform(item.url)
+            if p and p.id != "unsupported":
+                plat_id = p.id.lower()
+
+        if plat_id == "instagram":
+            self._platform_badge.setText("INSTAGRAM")
+            self._platform_badge.setStyleSheet(
+                "background: rgba(236, 72, 153, 0.15); color: #F472B6; "
+                "border: 1px solid rgba(236, 72, 153, 0.35); border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
+            )
+        elif plat_id == "facebook":
+            self._platform_badge.setText("FACEBOOK")
+            self._platform_badge.setStyleSheet(
+                "background: rgba(59, 130, 246, 0.15); color: #60A5FA; "
+                "border: 1px solid rgba(59, 130, 246, 0.35); border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
+            )
+        elif plat_id in ("twitter_x", "x"):
+            self._platform_badge.setText("X / TWITTER")
+            self._platform_badge.setStyleSheet(
+                "background: rgba(148, 163, 184, 0.15); color: #E2E8F0; "
+                "border: 1px solid rgba(148, 163, 184, 0.35); border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
+            )
+        elif plat_id == "pinterest":
+            self._platform_badge.setText("PINTEREST")
+            self._platform_badge.setStyleSheet(
+                "background: rgba(225, 29, 72, 0.15); color: #FB7185; "
+                "border: 1px solid rgba(225, 29, 72, 0.35); border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
+            )
+        else:
+            self._platform_badge.setText("YOUTUBE")
+            self._platform_badge.setStyleSheet(
+                "background: rgba(239, 68, 68, 0.15); color: #EF4444; "
+                "border: 1px solid rgba(239, 68, 68, 0.35); border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
+            )
+        self._platform_badge.show()
+
         # Download Type Marker (AUDIO ONLY, VIDEO + AUDIO, VIDEO ONLY, GIF)
         dtype = item.get_download_type_display().upper() if hasattr(item, "get_download_type_display") else (getattr(item, "download_type", "") or "VIDEO + AUDIO")
         self._type_badge.setText(dtype)
@@ -225,13 +324,6 @@ class QueueItemWidget(QFrame):
         # Quality
         self._quality_label.setText(f"📊 {item.video_format_label}")
 
-        # Status badge
-        color, icon = _STATUS_COLORS.get(
-            item.status, ("#888", "?")
-        )
-        self._status_label.setText(f"{icon} {item.status.value}")
-        self._status_label.setStyleSheet(f"color: {color}; font-weight: bold;")
-
         # Thumbnail
         if item.thumbnail_path and os.path.isfile(item.thumbnail_path):
             pixmap = QPixmap(item.thumbnail_path)
@@ -241,14 +333,19 @@ class QueueItemWidget(QFrame):
                                   Qt.TransformationMode.SmoothTransformation)
                 )
 
-        # Progress
+        # ── State Highlighting & Progress ──────────────────────────────────────
         if item.status == QueueItemStatus.DOWNLOADING:
+            # Highlight orange for active downloading
+            self.setStyleSheet(_STYLE_CARD_DOWNLOADING)
+            self._status_label.setText("⬇ Downloading")
+            self._status_label.setStyleSheet("color: #F59E0B; font-weight: bold;")
+
+            self._progress_bar.setStyleSheet(_PROGRESS_STYLE_ORANGE)
             self._progress_bar.show()
-            # If progress is 0% and no speed info yet, show indeterminate pulsing bar
             if item.progress < 0.1 and not item.speed:
-                self._progress_bar.setRange(0, 0)  # Indeterminate mode (pulsing)
+                self._progress_bar.setRange(0, 0)
             else:
-                self._progress_bar.setRange(0, 100)  # Normal percentage mode
+                self._progress_bar.setRange(0, 100)
                 self._progress_bar.setValue(int(item.progress))
                 self._progress_bar.setFormat(f"%p%  •  {dtype}")
             self._stats_label.show()
@@ -259,27 +356,52 @@ class QueueItemWidget(QFrame):
                 stats_parts.append(f"ETA: {item.eta}")
             if stats_parts:
                 self._stats_label.setText("  •  ".join(stats_parts))
+                self._stats_label.setStyleSheet("color: #FBBF24;")
             elif item.status_text:
                 self._stats_label.setText(item.status_text)
+                self._stats_label.setStyleSheet("color: #FBBF24;")
             else:
                 self._stats_label.setText("Downloading...")
+                self._stats_label.setStyleSheet("color: #FBBF24;")
             self._cancel_btn.show()
             self._retry_btn.hide()
             self._remove_btn.hide()
         elif item.status in (QueueItemStatus.DONE, QueueItemStatus.WARNING):
+            # Highlight green for downloaded
+            self.setStyleSheet(_STYLE_CARD_DONE)
+            self._status_label.setText("✓ Done" if item.status == QueueItemStatus.DONE else "✓ Done (Warn)")
+            self._status_label.setStyleSheet("color: #22C55E; font-weight: bold;")
+
+            self._progress_bar.setStyleSheet(_PROGRESS_STYLE_GREEN)
             self._progress_bar.show()
             self._progress_bar.setRange(0, 100)
             self._progress_bar.setValue(100)
             self._progress_bar.setFormat(f"100%  •  {dtype}")
             self._stats_label.show()
             if item.status == QueueItemStatus.WARNING and item.warning_reason:
-                self._stats_label.setText(f"Warning: {item.warning_reason}")
-                self._stats_label.setStyleSheet("color: #F77F00;")
+                self._stats_label.setText(f"Completed: {item.warning_reason}")
+                self._stats_label.setStyleSheet("color: #22C55E;")
             else:
                 self._stats_label.setText("Completed")
-                self._stats_label.setStyleSheet("color: #10B981;")
+                self._stats_label.setStyleSheet("color: #22C55E;")
             self._cancel_btn.hide()
+            self._open_location_btn.show()
+            self._remove_btn.show()
         else:
+            if item.status == QueueItemStatus.FAILED:
+                self.setStyleSheet(_STYLE_CARD_FAILED)
+                self._status_label.setText("✕ Failed")
+                self._status_label.setStyleSheet("color: #EF4444; font-weight: bold;")
+            elif item.status == QueueItemStatus.PENDING:
+                self.setStyleSheet(_STYLE_CARD_DEFAULT)
+                self._status_label.setText("⏳ Pending")
+                self._status_label.setStyleSheet("color: #F7B731; font-weight: bold;")
+            else:
+                self.setStyleSheet(_STYLE_CARD_DEFAULT)
+                color, icon = _STATUS_COLORS.get(item.status, ("#888", "?"))
+                self._status_label.setText(f"{icon} {item.status.value}")
+                self._status_label.setStyleSheet(f"color: {color}; font-weight: bold;")
+
             self._progress_bar.hide()
             self._stats_label.hide()
             self._cancel_btn.hide()
@@ -301,10 +423,6 @@ class QueueItemWidget(QFrame):
             self._resume_btn.hide()
             self._open_location_btn.hide()
         elif item.status == QueueItemStatus.WARNING:
-            self._progress_bar.setVisible(False)
-            self._stats_label.show()
-            self._stats_label.setText(f"Warning: {item.warning_reason}" if item.warning_reason else "Completed with warnings")
-            self._stats_label.setStyleSheet("color: #F77F00;")
             self._cancel_btn.hide()
             self._retry_btn.hide()
             self._remove_btn.show()

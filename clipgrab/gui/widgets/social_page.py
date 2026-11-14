@@ -43,7 +43,7 @@ from clipgrab.core.downloader import DownloadRequest, DownloadWorker
 from clipgrab.core.formats import AudioFormat, AudioOutputFormat, VideoFormat, VideoInfo, parse_video_info
 from clipgrab.core.logger import get_logger
 from clipgrab.core.platforms import DownloadEngine, detect_platform
-from clipgrab.core.validator import sanitize_filename, suggest_filename
+from clipgrab.core.validator import clean_media_url, sanitize_filename, suggest_filename
 from clipgrab.gui.icons import get_svg_icon, get_svg_pixmap
 from clipgrab.gui.theme import (
     BG_APP,
@@ -579,7 +579,12 @@ class SocialDownloadPage(QWidget):
         self._video_meta.setWordWrap(True)
         info_layout.addWidget(self._video_meta)
 
-        # Retry button (error state)
+        # Error action buttons (error state)
+        self._error_btns_row = QWidget()
+        err_layout = QHBoxLayout(self._error_btns_row)
+        err_layout.setContentsMargins(0, 0, 0, 0)
+        err_layout.setSpacing(10)
+
         self._retry_btn = QPushButton("Retry Fetch")
         self._retry_btn.setFixedHeight(32)
         self._retry_btn.setFont(get_font(pixel_size=12, weight=QFont.Weight.DemiBold))
@@ -587,8 +592,22 @@ class SocialDownloadPage(QWidget):
             f"QPushButton {{ background-color: {COLOR_ACCENT}; color: #FFFFFF; border: none; border-radius: 8px; padding: 0 14px; }}"
         )
         self._retry_btn.clicked.connect(self._on_fetch_clicked)
-        self._retry_btn.hide()
-        info_layout.addWidget(self._retry_btn)
+        err_layout.addWidget(self._retry_btn)
+
+        self._open_settings_btn = QPushButton("⚙ Configure Cookies in Settings")
+        self._open_settings_btn.setFixedHeight(32)
+        self._open_settings_btn.setFont(get_font(pixel_size=12, weight=QFont.Weight.DemiBold))
+        self._open_settings_btn.setStyleSheet(
+            f"QPushButton {{ background-color: {BG_CARD_ALT}; color: {COLOR_ACCENT}; border: 1px solid rgba(255, 92, 77, 0.3); border-radius: 8px; padding: 0 14px; }}"
+            f"QPushButton:hover {{ background-color: rgba(255, 92, 77, 0.1); }}"
+        )
+        self._open_settings_btn.clicked.connect(lambda: self.switch_platform_requested.emit("settings"))
+        self._open_settings_btn.hide()
+        err_layout.addWidget(self._open_settings_btn)
+        err_layout.addStretch()
+
+        self._error_btns_row.hide()
+        info_layout.addWidget(self._error_btns_row)
 
         self._info_card.hide()
         page_layout.addWidget(self._info_card)
@@ -833,7 +852,8 @@ class SocialDownloadPage(QWidget):
         if clipboard:
             text = clipboard.text().strip()
             if text:
-                self._url_input.setText(text)
+                cleaned = clean_media_url(text)
+                self._url_input.setText(cleaned)
                 self._on_fetch_clicked()
 
     def _on_url_text_changed(self, text: str) -> None:
@@ -903,7 +923,8 @@ class SocialDownloadPage(QWidget):
         self._info_card.show()
         self._options_card.hide()
         self._actions_box.hide()
-        self._retry_btn.hide()
+        if hasattr(self, "_error_btns_row"):
+            self._error_btns_row.hide()
         self._status_badge.setText("● Fetching info...")
         self._status_badge.setStyleSheet(f"color: {COLOR_WARNING};")
         self._video_title.setText("Retrieving details from server...")
@@ -919,7 +940,8 @@ class SocialDownloadPage(QWidget):
         self._info_card.show()
         self._options_card.show()
         self._actions_box.show()
-        self._retry_btn.hide()
+        if hasattr(self, "_error_btns_row"):
+            self._error_btns_row.hide()
         self._fetch_btn.setText("Fetch info")
         self._fetch_btn.setEnabled(True)
 
@@ -959,11 +981,16 @@ class SocialDownloadPage(QWidget):
         self._info_card.show()
         self._options_card.hide()
         self._actions_box.hide()
-        self._retry_btn.show()
+        if hasattr(self, "_error_btns_row"):
+            self._error_btns_row.show()
+            self._retry_btn.show()
+            # Show Configure Cookies button if auth/cookies related
+            is_cookie_related = any(k in error_msg.lower() for k in ("cookie", "login", "restrict", "private", "sign in"))
+            self._open_settings_btn.setVisible(is_cookie_related)
         self._status_badge.setText("● Fetch failed")
         self._status_badge.setStyleSheet(f"color: {COLOR_ERROR};")
         self._video_title.setText("Could not fetch media info")
-        self._video_meta.setText(error_msg[:200])
+        self._video_meta.setText(error_msg[:300])
         self._fetch_btn.setText("Fetch info")
         self._fetch_btn.setEnabled(True)
 
@@ -975,6 +1002,9 @@ class SocialDownloadPage(QWidget):
         url = self._url_input.text().strip()
         if not url:
             return
+
+        url = clean_media_url(url)
+        self._url_input.setText(url)
 
         plat = detect_platform(url)
         plat_id = plat.id.lower() if plat else "unsupported"

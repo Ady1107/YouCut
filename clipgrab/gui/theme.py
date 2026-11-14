@@ -415,6 +415,24 @@ QPushButton.chip[checked="true"], QPushButton.chip:checked {{
     font-weight: 600;
 }}
 
+/* ━━━ Progress Bars ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+QProgressBar {{
+    background-color: {BG_INPUT};
+    border: 1px solid {BORDER_INPUT};
+    border-radius: 9px;
+    text-align: center;
+    color: #FFFFFF;
+    font-size: 11px;
+    font-weight: 700;
+    min-height: 18px;
+    max-height: 18px;
+}}
+
+QProgressBar::chunk {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #10B981, stop:1 #22C55E);
+    border-radius: 8px;
+}}
+
 /* ━━━ Scrollbars ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 QScrollBar:vertical {{
     border: none;

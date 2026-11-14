@@ -49,28 +49,54 @@ class HistoryItemWidget(QFrame):
         self._entry_id = entry.id
         self.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
         self.setLineWidth(1)
-        self.setMinimumHeight(60)
+        self.setMinimumHeight(64)
+        self.setStyleSheet(
+            "HistoryItemWidget { background-color: #171922; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 12px; }"
+            "HistoryItemWidget:hover { background-color: #1B1E2B; border: 1px solid rgba(255, 255, 255, 0.12); }"
+        )
         self._setup_ui()
         self.update_from_entry(entry)
 
     def _setup_ui(self) -> None:
         """Set up the history item UI."""
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(12)
 
         # Info column
         info_col = QVBoxLayout()
-        info_col.setSpacing(2)
+        info_col.setSpacing(4)
+
+        # Top row: Platform badge + Type badge + Title
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+
+        self._platform_badge = QLabel("YOUTUBE")
+        self._platform_badge.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        self._platform_badge.setStyleSheet(
+            "background: rgba(239, 68, 68, 0.15); color: #EF4444; "
+            "border: 1px solid rgba(239, 68, 68, 0.35); border-radius: 4px; padding: 1px 6px; font-size: 10px;"
+        )
+        title_row.addWidget(self._platform_badge)
+
+        self._type_badge = QLabel("VIDEO")
+        self._type_badge.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        self._type_badge.setStyleSheet(
+            "background: rgba(59, 130, 246, 0.15); color: #60A5FA; "
+            "border: 1px solid rgba(59, 130, 246, 0.35); border-radius: 4px; padding: 1px 6px; font-size: 10px;"
+        )
+        title_row.addWidget(self._type_badge)
 
         self._title_label = QLabel("")
         self._title_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         self._title_label.setWordWrap(True)
         self._title_label.setMaximumHeight(36)
-        info_col.addWidget(self._title_label)
+        title_row.addWidget(self._title_label, stretch=1)
+
+        info_col.addLayout(title_row)
 
         details_row = QHBoxLayout()
-        details_row.setSpacing(16)
+        details_row.setSpacing(14)
 
         self._date_label = QLabel("")
         self._date_label.setFont(QFont("Segoe UI", 9))
@@ -134,6 +160,64 @@ class HistoryItemWidget(QFrame):
         self._output_path = entry.output_path
 
         self._title_label.setText(entry.title or "Untitled")
+
+        # Platform badge detection
+        from clipgrab.core.platforms import detect_platform
+        plat = detect_platform(entry.url)
+        plat_id = plat.id.lower() if plat else "youtube"
+
+        if plat_id == "instagram":
+            self._platform_badge.setText("INSTAGRAM")
+            self._platform_badge.setStyleSheet(
+                "background: rgba(236, 72, 153, 0.15); color: #F472B6; "
+                "border: 1px solid rgba(236, 72, 153, 0.35); border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
+            )
+        elif plat_id == "facebook":
+            self._platform_badge.setText("FACEBOOK")
+            self._platform_badge.setStyleSheet(
+                "background: rgba(59, 130, 246, 0.15); color: #60A5FA; "
+                "border: 1px solid rgba(59, 130, 246, 0.35); border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
+            )
+        elif plat_id in ("twitter_x", "x"):
+            self._platform_badge.setText("X / TWITTER")
+            self._platform_badge.setStyleSheet(
+                "background: rgba(148, 163, 184, 0.15); color: #E2E8F0; "
+                "border: 1px solid rgba(148, 163, 184, 0.35); border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
+            )
+        elif plat_id == "pinterest":
+            self._platform_badge.setText("PINTEREST")
+            self._platform_badge.setStyleSheet(
+                "background: rgba(225, 29, 72, 0.15); color: #FB7185; "
+                "border: 1px solid rgba(225, 29, 72, 0.35); border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
+            )
+        else:
+            self._platform_badge.setText("YOUTUBE")
+            self._platform_badge.setStyleSheet(
+                "background: rgba(239, 68, 68, 0.15); color: #EF4444; "
+                "border: 1px solid rgba(239, 68, 68, 0.35); border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
+            )
+
+        # File type badge (Video, Audio, GIF)
+        out_lower = (entry.output_path or "").lower()
+        vq_lower = (entry.video_quality or "").lower()
+        if out_lower.endswith(".gif") or "gif" in vq_lower:
+            self._type_badge.setText("GIF")
+            self._type_badge.setStyleSheet(
+                "background: rgba(244, 63, 94, 0.15); color: #FB7185; "
+                "border: 1px solid rgba(244, 63, 94, 0.35); border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
+            )
+        elif any(out_lower.endswith(ext) for ext in (".mp3", ".m4a", ".wav", ".aac", ".opus", ".flac")) or "audio only" in vq_lower or not entry.video_quality:
+            self._type_badge.setText("AUDIO")
+            self._type_badge.setStyleSheet(
+                "background: rgba(16, 185, 129, 0.15); color: #10B981; "
+                "border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
+            )
+        else:
+            self._type_badge.setText("VIDEO")
+            self._type_badge.setStyleSheet(
+                "background: rgba(59, 130, 246, 0.15); color: #60A5FA; "
+                "border: 1px solid rgba(59, 130, 246, 0.35); border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: bold;"
+            )
 
         # Date
         if entry.downloaded_at:

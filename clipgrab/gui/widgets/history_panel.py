@@ -14,6 +14,7 @@ from typing import Optional
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from clipgrab.core.platforms import detect_platform
 from clipgrab.data.history_db import HistoryDB, HistoryEntry
 from clipgrab.gui.widgets.history_item_widget import HistoryItemWidget
 from clipgrab.core.logger import get_logger
@@ -86,24 +88,50 @@ class HistoryPanel(QWidget):
 
         layout.addLayout(header)
 
-        # Search bar
-        search_row = QHBoxLayout()
+        # Search and filters row
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(8)
 
         self._search_input = QLineEdit()
-        self._search_input.setPlaceholderText("Search by title...")
+        self._search_input.setPlaceholderText("Search by title or URL...")
         self._search_input.setFixedHeight(36)
+        self._search_input.setMinimumWidth(160)
         self._search_input.setFont(QFont("Segoe UI", 10))
-        self._search_input.textChanged.connect(self._on_search)
-        search_row.addWidget(self._search_input)
+        self._search_input.textChanged.connect(self._on_filter_changed)
+        filter_row.addWidget(self._search_input, stretch=2)
+
+        # Platform filter combo
+        self._platform_filter = QComboBox()
+        self._platform_filter.setFixedHeight(36)
+        self._platform_filter.setMinimumWidth(130)
+        self._platform_filter.addItem("All Platforms", "all")
+        self._platform_filter.addItem("YouTube", "youtube")
+        self._platform_filter.addItem("Instagram", "instagram")
+        self._platform_filter.addItem("Facebook", "facebook")
+        self._platform_filter.addItem("X / Twitter", "twitter")
+        self._platform_filter.addItem("Pinterest", "pinterest")
+        self._platform_filter.currentIndexChanged.connect(self._on_filter_changed)
+        filter_row.addWidget(self._platform_filter)
+
+        # File type filter combo
+        self._type_filter = QComboBox()
+        self._type_filter.setFixedHeight(36)
+        self._type_filter.setMinimumWidth(120)
+        self._type_filter.addItem("All Types", "all")
+        self._type_filter.addItem("Video", "video")
+        self._type_filter.addItem("Audio", "audio")
+        self._type_filter.addItem("GIF", "gif")
+        self._type_filter.currentIndexChanged.connect(self._on_filter_changed)
+        filter_row.addWidget(self._type_filter)
 
         self._refresh_btn = QPushButton("Refresh")
         self._refresh_btn.setIcon(get_svg_icon("refresh", color="#9DA3B4", size=14))
         self._refresh_btn.setFixedHeight(36)
         self._refresh_btn.setMinimumWidth(90)
         self._refresh_btn.clicked.connect(self.refresh)
-        search_row.addWidget(self._refresh_btn)
+        filter_row.addWidget(self._refresh_btn)
 
-        layout.addLayout(search_row)
+        layout.addLayout(filter_row)
 
         # Scrollable list
         scroll = QScrollArea()
@@ -132,26 +160,70 @@ class HistoryPanel(QWidget):
         outer_layout.addLayout(center_row)
 
     def refresh(self) -> None:
-        """Reload the history list from the database."""
+        """Reload the history list applying current search and filters."""
         logger.info("[DEBUG] History Refresh button clicked")
-        query = self._search_input.text().strip()
-        if query:
-            entries = self._db.search(query)
-        else:
-            entries = self._db.get_all()
+        self._apply_filters()
 
-        self._populate_list(entries)
+    def _on_filter_changed(self) -> None:
+        """Handle search text or combo box selection changes."""
+        self._apply_filters()
 
-    def _on_search(self, text: str) -> None:
-        """Handle search input changes."""
-        text = text.strip()
-        if text:
-            entries = self._db.search(text)
-        else:
-            entries = self._db.get_all()
-        self._populate_list(entries)
+    def _apply_filters(self) -> None:
+        """Filter entries from database according to search text, platform, and type."""
+        all_entries = self._db.get_all(limit=1000)
+        query = self._search_input.text().strip().lower()
+        selected_plat = self._platform_filter.currentData() or "all"
+        selected_type = self._type_filter.currentData() or "all"
 
-    def _populate_list(self, entries: list[HistoryEntry]) -> None:
+        filtered: list[HistoryEntry] = []
+
+        for entry in all_entries:
+            # 1. Search text filter (matches title or URL)
+            if query:
+                title_match = query in (entry.title or "").lower()
+                url_match = query in (entry.url or "").lower()
+                if not (title_match or url_match):
+                    continue
+
+            # 2. Platform filter
+            if selected_plat != "all":
+                plat = detect_platform(entry.url)
+                p_id = plat.id.lower() if plat else "youtube"
+                if selected_plat == "youtube" and p_id != "youtube":
+                    continue
+                elif selected_plat == "instagram" and p_id != "instagram":
+                    continue
+                elif selected_plat == "facebook" and p_id != "facebook":
+                    continue
+                elif selected_plat == "twitter" and p_id not in ("twitter_x", "x"):
+                    continue
+                elif selected_plat == "pinterest" and p_id != "pinterest":
+                    continue
+
+            # 3. File type filter
+            if selected_type != "all":
+                out_lower = (entry.output_path or "").lower()
+                vq_lower = (entry.video_quality or "").lower()
+                is_gif = out_lower.endswith(".gif") or "gif" in vq_lower
+                is_audio = (
+                    any(out_lower.endswith(ext) for ext in (".mp3", ".m4a", ".wav", ".aac", ".opus", ".flac"))
+                    or "audio only" in vq_lower
+                    or (not entry.video_quality and not is_gif)
+                )
+                is_video = not is_gif and not is_audio
+
+                if selected_type == "video" and not is_video:
+                    continue
+                elif selected_type == "audio" and not is_audio:
+                    continue
+                elif selected_type == "gif" and not is_gif:
+                    continue
+
+            filtered.append(entry)
+
+        self._populate_list(filtered, total_count=len(all_entries))
+
+    def _populate_list(self, entries: list[HistoryEntry], total_count: Optional[int] = None) -> None:
         """Replace the list contents with the given entries."""
         # Clear existing widgets
         for widget in self._item_widgets:
@@ -159,15 +231,26 @@ class HistoryPanel(QWidget):
             widget.deleteLater()
         self._item_widgets.clear()
 
+        if total_count is None:
+            total_count = len(entries)
+
         if not entries:
             self._empty_label.show()
-            self._count_label.setText("0 entries")
+            if total_count > 0:
+                self._empty_label.setText("No history entries match your filter criteria.")
+                self._count_label.setText(f"0 of {total_count} entries")
+            else:
+                self._empty_label.setText("No download history yet.\nCompleted downloads will appear here.")
+                self._count_label.setText("0 entries")
             return
 
         self._empty_label.hide()
-        self._count_label.setText(
-            f"{len(entries)} entr{'ies' if len(entries) != 1 else 'y'}"
-        )
+        if total_count > len(entries):
+            self._count_label.setText(f"{len(entries)} of {total_count} entries")
+        else:
+            self._count_label.setText(
+                f"{len(entries)} entr{'ies' if len(entries) != 1 else 'y'}"
+            )
 
         for entry in entries:
             widget = HistoryItemWidget(entry)

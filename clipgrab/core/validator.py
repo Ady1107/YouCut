@@ -14,6 +14,29 @@ from clipgrab.core.logger import get_logger
 logger = get_logger("validator")
 
 
+def clean_media_url(url: str) -> str:
+    """
+    Strip tracking, referral, and marketing query parameters from media URLs
+    while preserving essential routing parameters (e.g. YouTube 'v=' or 'list=').
+    """
+    if not url:
+        return ""
+    from urllib.parse import parse_qsl, urlparse, urlunparse
+    try:
+        clean = url.strip()
+        parsed = urlparse(clean)
+        # Tracking & analytics query parameters to discard
+        drop_params = {
+            "utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term",
+            "igsh", "igshid", "fbclid", "mibextid", "sh", "ref", "ref_src",
+        }
+        q_pairs = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) if k.lower() not in drop_params]
+        new_query = "&".join(f"{k}={v}" if v else k for k, v in q_pairs)
+        return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment))
+    except Exception:
+        return url.strip()
+
+
 class VideoType(Enum):
     """Classification of YouTube content types."""
     SINGLE_VIDEO = "single_video"

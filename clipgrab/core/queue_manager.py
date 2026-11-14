@@ -63,10 +63,26 @@ class QueueItem:
     # The actual download request (set when building the job)
     download_request: Optional[DownloadRequest] = None
 
+    def __post_init__(self) -> None:
+        if self.url and (not self.platform_id or self.platform_id == "youtube"):
+            from clipgrab.core.platforms import detect_platform
+            p = detect_platform(self.url)
+            if p and p.id != "unsupported":
+                self.platform_id = p.id
+
     def get_download_type_display(self) -> str:
         """Return the normalized download type marker (AUDIO ONLY, VIDEO + AUDIO, VIDEO ONLY, GIF)."""
         if self.download_type:
-            return self.download_type
+            raw = self.download_type.upper().replace("_", " ")
+            if "VIDEO AUDIO" in raw or "VIDEO+AUDIO" in raw or "VIDEO + AUDIO" in raw:
+                return "VIDEO + AUDIO"
+            if "AUDIO" in raw:
+                return "AUDIO ONLY"
+            if "VIDEO" in raw:
+                return "VIDEO ONLY"
+            if "GIF" in raw:
+                return "GIF"
+            return raw
         if self.download_request:
             if getattr(self.download_request, "convert_to_gif", False):
                 return "GIF"

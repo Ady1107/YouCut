@@ -11,7 +11,7 @@ from PySide6.QtCore import QObject, Signal, Slot, QProcess, QProcessEnvironment,
 
 from clipgrab.core.ffmpeg_utils import get_ytdlp_path, get_ffmpeg_directory
 from clipgrab.core.formats import VideoInfo, parse_video_info
-from clipgrab.core.validator import sanitize_filename
+from clipgrab.core.validator import clean_media_url, sanitize_filename
 
 logger = logging.getLogger("downloader")
 
@@ -196,8 +196,9 @@ class DownloadWorker(QObject):
                 multi-item posts return their full entries list.
         """
         self._cancel_requested = False
+        url = clean_media_url(url)
         ytdlp_path = get_ytdlp_path()
-        cmd = [ytdlp_path, "-J"]
+        cmd = [ytdlp_path, "-J", "--ignore-errors"]
 
         # --no-playlist: only needed for YouTube to prevent playlist expansion.
         # Instagram carousels ARE represented as a "playlist" in yt-dlp, so we
@@ -734,10 +735,10 @@ class DownloadWorker(QObject):
 
 def _classify_error(stderr: str, is_extraction: bool) -> str:
     stderr_lower = stderr.lower()
-    if "login" in stderr_lower or "checkpoint" in stderr_lower or "log in" in stderr_lower:
+    if any(k in stderr_lower for k in ("registered users", "login", "log in", "checkpoint", "not granting access", "empty media response", "authentication")):
         return (
-            "Login required or content is private. "
-            "To access this media, select your browser in Settings > Cookies & Authentication, "
+            "This post is private or restricted by Facebook/Instagram. "
+            "To access it, select your browser in Settings > Cookies & Authentication, "
             "or provide an authorized cookies.txt file."
         )
     if "private video" in stderr_lower:
@@ -749,11 +750,11 @@ def _classify_error(stderr: str, is_extraction: bool) -> str:
             "or provide an authorized cookies.txt file."
         )
     if "unavailable" in stderr_lower or "removed" in stderr_lower:
-        return "This video is unavailable. It may have been removed or made private."
+        return "This media is unavailable. It may have been removed or made private."
     if "copyright" in stderr_lower:
-        return "This video is unavailable due to a copyright claim."
+        return "This media is unavailable due to a copyright claim."
     if "region" in stderr_lower or "country" in stderr_lower:
-        return "This video is not available in your region."
+        return "This media is not available in your region."
     if "premiere" in stderr_lower:
         return "This video is a scheduled premiere and is not yet available for download."
     if "live" in stderr_lower and ("not started" in stderr_lower or "offline" in stderr_lower):
@@ -762,7 +763,20 @@ def _classify_error(stderr: str, is_extraction: bool) -> str:
         return "No internet connection. Please check your network and try again."
     if "ffmpeg" in stderr_lower and ("not found" in stderr_lower or "error" in stderr_lower):
         return "FFmpeg error during video processing. The bundled FFmpeg may be corrupted or missing."
-    if "no video formats" in stderr_lower or "format" in stderr_lower and "not available" in stderr_lower:
+    if "no video formats" in stderr_lower:
+        if is_extraction:
+            return (
+                "No downloadable video found in this post. "
+                "(Note: Photo-only posts cannot be downloaded as videos). "
+                "If this is a video post, it may require login in Settings > Cookies & Authentication."
+            )
+        return "The selected format is not available. Try selecting a different quality."
+    if "format" in stderr_lower and "not available" in stderr_lower:
+        if is_extraction:
+            return (
+                "No video stream available for this post. "
+                "The post may be photo-only or restricted."
+            )
         return "The selected format is not available. Try selecting a different quality."
 
     if is_extraction:
