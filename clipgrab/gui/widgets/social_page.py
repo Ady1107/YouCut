@@ -242,10 +242,10 @@ class SocialDownloadPage(QWidget):
             self._icon_name = "instagram"
             self._badge_color = "#E1306C"
             self._badge_bg = "qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #833AB4, stop:0.5 #FD1D1D, stop:1 #FCB045)"
-            self._subtitle_text = "Download reels, posts, and carousels. Paste a link, fetch its details, then save."
-            self._content_types = ["Reel", "Post"]
-            self._placeholder = "Paste an Instagram reel, video, or post URL..."
-            self._domain_chips = ["instagram.com/reel/", "instagram.com/p/", "instagram.com/tv/"]
+            self._subtitle_text = "Download Instagram reels. Paste a link, fetch its details, then save."
+            self._content_types = ["Reel"]
+            self._placeholder = "Paste an Instagram reel or video URL..."
+            self._domain_chips = ["instagram.com/reel/", "instagram.com/tv/"]
             self._type_singular = "Reel"
         else:
             self._platform_name = "Facebook"
@@ -253,7 +253,7 @@ class SocialDownloadPage(QWidget):
             self._badge_color = "#1877F2"
             self._badge_bg = "#1877F2"
             self._subtitle_text = "Download Facebook reels and videos. Paste a link, fetch its details, then save."
-            self._content_types = ["Reel", "Video", "Post"]
+            self._content_types = ["Reel", "Video"]
             self._placeholder = "Paste a Facebook reel, video, or watch URL..."
             self._domain_chips = ["facebook.com/reel/", "facebook.com/watch/", "fb.watch/"]
             self._type_singular = "Video"
@@ -466,7 +466,7 @@ class SocialDownloadPage(QWidget):
         empty_layout.addWidget(empty_heading)
 
         empty_desc = QLabel(
-            f"Copy the link of a {self._platform_name.lower()} reel, video, or post from your browser or app, paste it above, and press Fetch info."
+            f"Copy the link of a {self._platform_name.lower()} reel or video from your browser or app, paste it above, and press Fetch info."
         )
         empty_desc.setFont(get_font(pixel_size=13))
         empty_desc.setStyleSheet(f"color: {TEXT_SECONDARY};")
@@ -877,7 +877,7 @@ class SocialDownloadPage(QWidget):
             elif "/watch" in clean_lower or "fb.watch" in clean_lower or "/video" in clean_lower or "/share/v" in clean_lower:
                 self._set_content_type("Video" if "Video" in self._type_buttons else "Reel")
             elif "/p/" in clean_lower or "/post" in clean_lower or "/share/p" in clean_lower:
-                self._set_content_type("Post")
+                self._set_content_type("Video" if "Video" in self._type_buttons else "Reel")
         elif plat.engine != DownloadEngine.UNSUPPORTED and plat_id != "unsupported":
             self._platform_chip.hide()
             self._valid_check.hide()

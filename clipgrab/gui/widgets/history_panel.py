@@ -100,7 +100,7 @@ class HistoryPanel(QWidget):
         self._search_input.textChanged.connect(self._on_filter_changed)
         filter_row.addWidget(self._search_input, stretch=2)
 
-        # Platform filter combo
+        # Platform filter combo (YouTube, Instagram, Facebook)
         self._platform_filter = QComboBox()
         self._platform_filter.setFixedHeight(36)
         self._platform_filter.setMinimumWidth(130)
@@ -108,8 +108,6 @@ class HistoryPanel(QWidget):
         self._platform_filter.addItem("YouTube", "youtube")
         self._platform_filter.addItem("Instagram", "instagram")
         self._platform_filter.addItem("Facebook", "facebook")
-        self._platform_filter.addItem("X / Twitter", "twitter")
-        self._platform_filter.addItem("Pinterest", "pinterest")
         self._platform_filter.currentIndexChanged.connect(self._on_filter_changed)
         filter_row.addWidget(self._platform_filter)
 
@@ -194,10 +192,6 @@ class HistoryPanel(QWidget):
                 elif selected_plat == "instagram" and p_id != "instagram":
                     continue
                 elif selected_plat == "facebook" and p_id != "facebook":
-                    continue
-                elif selected_plat == "twitter" and p_id not in ("twitter_x", "x"):
-                    continue
-                elif selected_plat == "pinterest" and p_id != "pinterest":
                     continue
 
             # 3. File type filter

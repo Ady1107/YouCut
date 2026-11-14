@@ -244,6 +244,48 @@ class DownloadWorker(QObject):
 
             if returncode != 0:
                 stderr = stderr.strip()
+                # If failure was caused by browser cookie database locking (e.g. Chrome is open),
+                # retry fetch without cookies! Public videos and reels do not require cookies.
+                has_browser_cookies = "--cookies-from-browser" in cmd
+                is_cookie_lock = any(
+                    k in stderr.lower() for k in ("cookie database", "could not copy", "cookie lock", "cookies-from-browser")
+                )
+                if is_cookie_lock and has_browser_cookies and not self._cancel_requested:
+                    logger.warning("Browser cookie database is locked (%s). Retrying fetch without cookies...", stderr)
+                    cmd_no_cookies = []
+                    skip_next = False
+                    for arg in cmd:
+                        if skip_next:
+                            skip_next = False
+                            continue
+                        if arg == "--cookies-from-browser":
+                            skip_next = True
+                            continue
+                        cmd_no_cookies.append(arg)
+
+                    try:
+                        retry_proc = subprocess.Popen(
+                            cmd_no_cookies,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                            creationflags=_CREATION_FLAGS,
+                            encoding="utf-8",
+                            errors="replace",
+                        )
+                        self._fetch_process = retry_proc
+                        self._process_pid = retry_proc.pid
+                        stdout_retry, stderr_retry = retry_proc.communicate(timeout=60)
+                        if retry_proc.returncode == 0 and stdout_retry.strip():
+                            info_dict = json.loads(stdout_retry.strip())
+                            video_info = parse_video_info(info_dict)
+                            self.info_fetched.emit(video_info)
+                            return
+                        stderr = stderr_retry.strip()
+                        returncode = retry_proc.returncode
+                    except Exception as retry_err:
+                        logger.error("Retry without cookies also failed: %s", retry_err)
+
                 is_extraction = _is_extraction_related(stderr)
                 error_msg = _classify_error(stderr, is_extraction)
                 logger.error("yt-dlp info fetch failed (rc=%d): %s", returncode, stderr)
@@ -735,6 +777,11 @@ class DownloadWorker(QObject):
 
 def _classify_error(stderr: str, is_extraction: bool) -> str:
     stderr_lower = stderr.lower()
+    if any(k in stderr_lower for k in ("could not copy", "cookie database", "cookie lock")):
+        return (
+            "Your browser (e.g. Chrome) has locked its cookie database because it is currently running. "
+            "Please close your browser, or select 'None' for browser cookies in Settings > Cookies & Authentication."
+        )
     if any(k in stderr_lower for k in ("registered users", "login", "log in", "checkpoint", "not granting access", "empty media response", "authentication")):
         return (
             "This post is private or restricted by Facebook/Instagram. "

@@ -73,7 +73,32 @@ TEXT_SECONDARY = "#9BA1B0"      # Subtitles, labels, descriptions
 TEXT_MUTED = "#6F7585"          # Disabled text, placeholders, timeline ticks
 TEXT_TERTIARY = "#787F90"       # Inactive buttons, secondary badges
 
-# ── Metrics & Radii (at 1176x784 logical px) ─────────────────────────────────
+# ── Light Theme Surfaces & Tokens ─────────────────────────────────────────────
+BG_APP_LIGHT = "#F4F5F8"              # Base application window background
+BG_SIDEBAR_LIGHT = "#E9EBF0"          # Sidebar background
+BG_CARD_LIGHT = "#FFFFFF"             # Card container surface
+BG_CARD_ALT_LIGHT = "#F0F2F6"         # Secondary card surface
+BG_INPUT_LIGHT = "#FFFFFF"            # Input background
+BG_INPUT_HOVER_LIGHT = "#F8F9FA"
+BG_PILL_LIGHT = "#E2E5EC"             # Unselected pill surface
+BG_PILL_HOVER_LIGHT = "#D5D9E3"
+BG_PILL_SELECTED_LIGHT = "#FFE8E5"    # Tinted accent background for selected chips
+BG_BADGE_LIGHT = "#FFE8E5"
+BG_TOOLTIP_LIGHT = "#FFFFFF"
+
+BORDER_CARD_LIGHT = "#DCE0E8"
+BORDER_CARD_SUBTLE_LIGHT = "#E5E8EF"
+BORDER_STRONG_LIGHT = "#CCD1DC"
+BORDER_INPUT_LIGHT = "#CCD1DC"
+BORDER_INPUT_FOCUS_LIGHT = "#FF5B4A"
+BORDER_DIVIDER_LIGHT = "#E2E5EC"
+BORDER_PILL_LIGHT = "#CCD1DC"
+BORDER_PILL_SELECTED_LIGHT = "#FF5B4A"
+
+TEXT_PRIMARY_LIGHT = "#111318"
+TEXT_SECONDARY_LIGHT = "#5A6170"
+TEXT_MUTED_LIGHT = "#8A92A2"
+TEXT_TERTIARY_LIGHT = "#787F90"
 SIDEBAR_WIDTH = 190
 SIDEBAR_COLLAPSED_WIDTH = 64
 RIGHT_COL_WIDTH = 300
@@ -188,6 +213,28 @@ _DARK_PALETTE_COLORS = {
     "midlight":         QColor(BG_PILL),
 }
 
+_LIGHT_PALETTE_COLORS = {
+    "window":           QColor(BG_APP_LIGHT),
+    "window_text":      QColor(TEXT_PRIMARY_LIGHT),
+    "base":             QColor(BG_INPUT_LIGHT),
+    "alt_base":         QColor(BG_CARD_LIGHT),
+    "text":             QColor(TEXT_PRIMARY_LIGHT),
+    "button":           QColor(BG_PILL_LIGHT),
+    "button_text":      QColor(TEXT_PRIMARY_LIGHT),
+    "highlight":        QColor(COLOR_ACCENT),
+    "highlight_text":   QColor("#FFFFFF"),
+    "link":             QColor(COLOR_ACCENT),
+    "bright_text":      QColor("#FFFFFF"),
+    "tooltip_base":     QColor(BG_TOOLTIP_LIGHT),
+    "tooltip_text":     QColor(TEXT_PRIMARY_LIGHT),
+    "placeholder":      QColor(TEXT_MUTED_LIGHT),
+    "mid":              QColor(BORDER_CARD_LIGHT),
+    "dark":             QColor(BG_SIDEBAR_LIGHT),
+    "shadow":           QColor("#B0B5C0"),
+    "light":            QColor(BG_CARD_ALT_LIGHT),
+    "midlight":         QColor(BG_PILL_LIGHT),
+}
+
 
 def _build_palette(colors: dict[str, QColor]) -> QPalette:
     palette = QPalette()
@@ -238,7 +285,27 @@ if not os.path.isfile(_chevron_svg_path):
     if os.path.isfile(_alt):
         _chevron_svg_path = _alt
 
-DARK_STYLESHEET = f"""
+def _generate_stylesheet(
+    bg_app: str,
+    bg_card: str,
+    bg_input: str,
+    bg_input_hover: str,
+    bg_pill: str,
+    bg_pill_hover: str,
+    bg_pill_selected: str,
+    bg_card_alt: str,
+    bg_tooltip: str,
+    border_card: str,
+    border_input: str,
+    border_input_focus: str,
+    border_divider: str,
+    border_pill: str,
+    border_pill_selected: str,
+    text_primary: str,
+    text_secondary: str,
+    text_muted: str,
+) -> str:
+    return f"""
 /* ━━━ Global Application Typography & Resets ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 * {{
     font-family: 'Inter', 'Nirmala UI', 'Segoe UI', -apple-system, sans-serif;
@@ -246,15 +313,15 @@ DARK_STYLESHEET = f"""
 }}
 
 QMainWindow, QWidget#centralWidget {{
-    background-color: {BG_APP};
-    color: {TEXT_PRIMARY};
+    background-color: {bg_app};
+    color: {text_primary};
 }}
 
 /* ━━━ Tooltips ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 QToolTip {{
-    background-color: {BG_TOOLTIP};
-    color: {TEXT_PRIMARY};
-    border: 1px solid {BORDER_CARD};
+    background-color: {bg_tooltip};
+    color: {text_primary};
+    border: 1px solid {border_card};
     padding: 6px 10px;
     border-radius: 8px;
     font-size: 11px;
@@ -262,47 +329,47 @@ QToolTip {{
 
 /* ━━━ Card Container (QFrame.card) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 QFrame.card, QFrame#cardContainer {{
-    background-color: {BG_CARD};
-    border: 1px solid {BORDER_CARD};
+    background-color: {bg_card};
+    border: 1px solid {border_card};
     border-radius: {RADIUS_CARD}px;
 }}
 
 /* ━━━ Text Inputs ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox {{
-    border: 1px solid {BORDER_INPUT};
+    border: 1px solid {border_input};
     border-radius: {RADIUS_FIELD}px;
     padding: 8px 14px;
-    background-color: {BG_INPUT};
-    color: {TEXT_PRIMARY};
+    background-color: {bg_input};
+    color: {text_primary};
     selection-background-color: {COLOR_ACCENT};
     selection-color: #FFFFFF;
     font-size: 13px;
 }}
 
 QLineEdit:focus, QTextEdit:focus {{
-    border: 1px solid {BORDER_INPUT_FOCUS};
-    background-color: {BG_INPUT_HOVER};
+    border: 1px solid {border_input_focus};
+    background-color: {bg_input_hover};
 }}
 
 QLineEdit:disabled {{
-    background-color: {BG_INPUT};
-    color: {TEXT_MUTED};
-    border: 1px solid {BORDER_DIVIDER};
+    background-color: {bg_input};
+    color: {text_muted};
+    border: 1px solid {border_divider};
 }}
 
 /* ━━━ Combo Boxes ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 QComboBox {{
-    border: 1px solid {BORDER_INPUT};
+    border: 1px solid {border_input};
     border-radius: {RADIUS_FIELD}px;
     padding: 8px 14px;
-    background-color: {BG_INPUT};
-    color: {TEXT_PRIMARY};
+    background-color: {bg_input};
+    color: {text_primary};
     font-size: 13px;
     min-height: 22px;
 }}
 
 QComboBox:focus, QComboBox:on {{
-    border: 1px solid {BORDER_INPUT_FOCUS};
+    border: 1px solid {border_input_focus};
 }}
 
 QComboBox::drop-down {{
@@ -320,10 +387,10 @@ QComboBox::down-arrow {{
 }}
 
 QComboBox QAbstractItemView {{
-    background-color: {BG_CARD};
-    border: 1px solid {BORDER_CARD};
+    background-color: {bg_card};
+    border: 1px solid {border_card};
     border-radius: 10px;
-    color: {TEXT_PRIMARY};
+    color: {text_primary};
     selection-background-color: {COLOR_ACCENT_TINT};
     selection-color: #FFFFFF;
     padding: 6px;
@@ -337,11 +404,10 @@ QComboBox QAbstractItemView::item {{
 }}
 
 QComboBox QAbstractItemView::item:hover {{
-    background-color: {BG_PILL};
+    background-color: {bg_pill};
 }}
 
 /* ━━━ Buttons ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-/* Primary Brand Button */
 QPushButton.btnPrimary, QPushButton#primaryBtn {{
     background-color: {COLOR_ACCENT};
     color: #FFFFFF;
@@ -361,16 +427,15 @@ QPushButton.btnPrimary:pressed, QPushButton#primaryBtn:pressed {{
 }}
 
 QPushButton.btnPrimary:disabled, QPushButton#primaryBtn:disabled {{
-    background-color: {BG_PILL};
-    color: {TEXT_MUTED};
-    border: 1px solid {BORDER_DIVIDER};
+    background-color: {bg_pill};
+    color: {text_muted};
+    border: 1px solid {border_divider};
 }}
 
-/* Secondary / Neutral Button */
 QPushButton {{
-    background-color: {BG_PILL};
-    color: {TEXT_PRIMARY};
-    border: 1px solid {BORDER_PILL};
+    background-color: {bg_pill};
+    color: {text_primary};
+    border: 1px solid {border_pill};
     border-radius: {RADIUS_BUTTON}px;
     padding: 8px 16px;
     font-weight: 500;
@@ -378,25 +443,24 @@ QPushButton {{
 }}
 
 QPushButton:hover {{
-    background-color: {BG_PILL_HOVER};
-    border-color: {BORDER_CARD};
+    background-color: {bg_pill_hover};
+    border-color: {border_card};
 }}
 
 QPushButton:pressed {{
-    background-color: {BG_CARD_ALT};
+    background-color: {bg_card_alt};
 }}
 
 QPushButton:disabled {{
-    background-color: {BG_INPUT};
-    color: {TEXT_MUTED};
-    border: 1px solid {BORDER_DIVIDER};
+    background-color: {bg_input};
+    color: {text_muted};
+    border: 1px solid {border_divider};
 }}
 
-/* Pill / Chip Toggle Button */
 QPushButton.chip {{
-    background-color: {BG_PILL};
-    color: {TEXT_SECONDARY};
-    border: 1px solid {BORDER_PILL};
+    background-color: {bg_pill};
+    color: {text_secondary};
+    border: 1px solid {border_pill};
     border-radius: 9999px;
     padding: 6px 14px;
     font-weight: 500;
@@ -404,21 +468,21 @@ QPushButton.chip {{
 }}
 
 QPushButton.chip:hover {{
-    background-color: {BG_PILL_HOVER};
-    color: {TEXT_PRIMARY};
+    background-color: {bg_pill_hover};
+    color: {text_primary};
 }}
 
 QPushButton.chip[checked="true"], QPushButton.chip:checked {{
-    background-color: {BG_PILL_SELECTED};
+    background-color: {bg_pill_selected};
     color: #FFFFFF;
-    border: 1px solid {BORDER_PILL_SELECTED};
+    border: 1px solid {border_pill_selected};
     font-weight: 600;
 }}
 
 /* ━━━ Progress Bars ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 QProgressBar {{
-    background-color: {BG_INPUT};
-    border: 1px solid {BORDER_INPUT};
+    background-color: {bg_input};
+    border: 1px solid {border_input};
     border-radius: 9px;
     text-align: center;
     color: #FFFFFF;
@@ -443,13 +507,13 @@ QScrollBar:vertical {{
 }}
 
 QScrollBar::handle:vertical {{
-    background: {BORDER_CARD};
+    background: {border_card};
     border-radius: 3px;
     min-height: 40px;
 }}
 
 QScrollBar::handle:vertical:hover {{
-    background: {BORDER_PILL};
+    background: {border_pill};
 }}
 
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
@@ -469,13 +533,13 @@ QScrollBar:horizontal {{
 }}
 
 QScrollBar::handle:horizontal {{
-    background: {BORDER_CARD};
+    background: {border_card};
     border-radius: 3px;
     min-width: 40px;
 }}
 
 QScrollBar::handle:horizontal:hover {{
-    background: {BORDER_PILL};
+    background: {border_pill};
 }}
 
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
@@ -488,9 +552,9 @@ QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
 
 /* ━━━ Status Bar ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 QStatusBar {{
-    background-color: {BG_APP};
-    color: {TEXT_MUTED};
-    border-top: 1px solid {BORDER_DIVIDER};
+    background-color: {bg_app};
+    color: {text_muted};
+    border-top: 1px solid {border_divider};
     font-size: 11px;
     padding: 2px 8px;
 }}
@@ -501,35 +565,84 @@ QScrollArea {{
 }}
 """
 
+DARK_STYLESHEET = _generate_stylesheet(
+    bg_app=BG_APP,
+    bg_card=BG_CARD,
+    bg_input=BG_INPUT,
+    bg_input_hover=BG_INPUT_HOVER,
+    bg_pill=BG_PILL,
+    bg_pill_hover=BG_PILL_HOVER,
+    bg_pill_selected=BG_PILL_SELECTED,
+    bg_card_alt=BG_CARD_ALT,
+    bg_tooltip=BG_TOOLTIP,
+    border_card=BORDER_CARD,
+    border_input=BORDER_INPUT,
+    border_input_focus=BORDER_INPUT_FOCUS,
+    border_divider=BORDER_DIVIDER,
+    border_pill=BORDER_PILL,
+    border_pill_selected=BORDER_PILL_SELECTED,
+    text_primary=TEXT_PRIMARY,
+    text_secondary=TEXT_SECONDARY,
+    text_muted=TEXT_MUTED,
+)
+
+LIGHT_STYLESHEET = _generate_stylesheet(
+    bg_app=BG_APP_LIGHT,
+    bg_card=BG_CARD_LIGHT,
+    bg_input=BG_INPUT_LIGHT,
+    bg_input_hover=BG_INPUT_HOVER_LIGHT,
+    bg_pill=BG_PILL_LIGHT,
+    bg_pill_hover=BG_PILL_HOVER_LIGHT,
+    bg_pill_selected=BG_PILL_SELECTED_LIGHT,
+    bg_card_alt=BG_CARD_ALT_LIGHT,
+    bg_tooltip=BG_TOOLTIP_LIGHT,
+    border_card=BORDER_CARD_LIGHT,
+    border_input=BORDER_INPUT_LIGHT,
+    border_input_focus=BORDER_INPUT_FOCUS_LIGHT,
+    border_divider=BORDER_DIVIDER_LIGHT,
+    border_pill=BORDER_PILL_LIGHT,
+    border_pill_selected=BORDER_PILL_SELECTED_LIGHT,
+    text_primary=TEXT_PRIMARY_LIGHT,
+    text_secondary=TEXT_SECONDARY_LIGHT,
+    text_muted=TEXT_MUTED_LIGHT,
+)
+
 
 def apply_theme(app: QApplication, theme_name: str = "dark") -> None:
     """
-    Apply dark theme to the application.
-    Light theme is hidden/frozen per Decision 1 until redesigned.
+    Apply dark or light theme to the application.
     """
     init_fonts()
     app.setStyle("Fusion")
 
-    palette = _build_palette(_DARK_PALETTE_COLORS)
-    app.setPalette(palette)
-    app.setStyleSheet(DARK_STYLESHEET)
-    app.setProperty("current_theme", "dark")
+    if theme_name == "light":
+        palette = _build_palette(_LIGHT_PALETTE_COLORS)
+        app.setPalette(palette)
+        app.setStyleSheet(LIGHT_STYLESHEET)
+        app.setProperty("current_theme", "light")
+        logger.info("Light theme and Inter typography applied")
+    else:
+        palette = _build_palette(_DARK_PALETTE_COLORS)
+        app.setPalette(palette)
+        app.setStyleSheet(DARK_STYLESHEET)
+        app.setProperty("current_theme", "dark")
+        logger.info("Dark theme and Inter typography applied")
 
-    # Set default application font with Devanagari fallback chain
     app_font = QFont()
     app_font.setFamilies(FONT_FAMILIES)
     app_font.setPixelSize(14)
     app.setFont(app_font)
-    logger.info("Dark theme and Inter typography applied")
 
 
 def toggle_theme(app: QApplication, settings: AppSettings) -> str:
     """
-    Stub for theme toggle — per Decision 1, dark theme only is enabled in this phase.
+    Toggle between dark and light themes, saving to settings.
     """
-    apply_theme(app, "dark")
-    settings.update(theme="dark")
-    return "dark"
+    cur_theme = getattr(settings, "theme", "dark")
+    new_theme = "light" if cur_theme == "dark" else "dark"
+    apply_theme(app, new_theme)
+    settings.update(theme=new_theme)
+    return new_theme
 
 
 def get_accent_color() -> QColor:

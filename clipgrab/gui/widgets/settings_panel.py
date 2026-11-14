@@ -139,11 +139,20 @@ class SettingsPanel(QWidget):
         appearance_layout = QVBoxLayout(appearance_group)
 
         theme_row = QHBoxLayout()
+        theme_row.setSpacing(12)
         theme_label = QLabel("Theme:")
         theme_label.setFont(QFont("Segoe UI", 10))
         theme_row.addWidget(theme_label)
 
-        self._theme_btn = QPushButton("🌙 Switch to Light Theme")
+        self._theme_combo = QComboBox()
+        self._theme_combo.setFixedHeight(34)
+        self._theme_combo.setMinimumWidth(150)
+        self._theme_combo.addItem("Dark Theme", "dark")
+        self._theme_combo.addItem("Light Theme", "light")
+        self._theme_combo.currentIndexChanged.connect(self._on_theme_combo_changed)
+        theme_row.addWidget(self._theme_combo)
+
+        self._theme_btn = QPushButton("☀️ Switch to Light Theme")
         self._theme_btn.setMinimumHeight(34)
         self._theme_btn.setFont(QFont("Segoe UI", 10))
         self._theme_btn.clicked.connect(self._on_theme_toggle)
@@ -152,7 +161,6 @@ class SettingsPanel(QWidget):
 
         appearance_layout.addLayout(theme_row)
         layout.addWidget(appearance_group)
-        appearance_group.hide()  # Per Decision 1: Dark theme only until redesigned
 
         # ── Downloads ─────────────────────────────────────────────────────
         downloads_group = QGroupBox("Downloads")
@@ -351,10 +359,8 @@ class SettingsPanel(QWidget):
         self._folder_input.setText(self._settings.last_output_folder)
         self._auto_update_check.setChecked(self._settings.auto_update_ytdlp)
 
-        if self._settings.theme == "dark":
-            self._theme_btn.setText("☀️ Switch to Light Theme")
-        else:
-            self._theme_btn.setText("🌙 Switch to Dark Theme")
+        cur_theme = getattr(self._settings, "theme", "dark")
+        self.update_theme_button(cur_theme)
 
         # Video container format
         fmt = getattr(self._settings, "default_merge_format", "mp4").upper()
@@ -446,11 +452,23 @@ class SettingsPanel(QWidget):
             self._ffmpeg_version_label.setStyleSheet("color: #e74c3c;")
 
     def update_theme_button(self, current_theme: str) -> None:
-        """Update the theme toggle button text after a theme change."""
+        """Update the theme toggle button and combo box after a theme change."""
+        idx = self._theme_combo.findData(current_theme)
+        if idx >= 0:
+            self._theme_combo.blockSignals(True)
+            self._theme_combo.setCurrentIndex(idx)
+            self._theme_combo.blockSignals(False)
+
         if current_theme == "dark":
             self._theme_btn.setText("☀️ Switch to Light Theme")
         else:
             self._theme_btn.setText("🌙 Switch to Dark Theme")
+
+    def _on_theme_combo_changed(self) -> None:
+        """Handle theme change from combo box."""
+        selected_theme = self._theme_combo.currentData() or "dark"
+        if selected_theme != getattr(self._settings, "theme", "dark"):
+            self.theme_toggle_requested.emit()
 
     def _on_banner_download(self) -> None:
         """Open the download URL in the system browser."""

@@ -708,7 +708,8 @@ class MainWindow(QMainWindow):
     def _on_theme_toggle(self) -> None:
         app = QApplication.instance()
         if app:
-            toggle_theme(app, self._settings)
+            new_theme = toggle_theme(app, self._settings)
+            self._settings_panel.update_theme_button(new_theme)
 
     def _on_settings_changed(self) -> None:
         folder = self._settings.last_output_folder

@@ -98,7 +98,7 @@ class TestResponsiveAndSocial(unittest.TestCase):
         ig = self.win._instagram_page
         self.assertIsInstance(ig, SocialDownloadPage)
         self.assertEqual(ig._platform_id, "instagram")
-        self.assertEqual(list(ig._type_buttons.keys()), ["Reel", "Post"])
+        self.assertEqual(list(ig._type_buttons.keys()), ["Reel"])
         self.assertFalse(ig._empty_card.isHidden())
         self.assertTrue(ig._info_card.isHidden())
 
@@ -106,9 +106,9 @@ class TestResponsiveAndSocial(unittest.TestCase):
         ig._on_url_text_changed("https://www.instagram.com/reel/C123456/")
         self.assertEqual(ig._active_type, "Reel")
 
-        # URL auto-selects Post
+        # Post URL also maps to Reel
         ig._on_url_text_changed("https://www.instagram.com/p/C987654/")
-        self.assertEqual(ig._active_type, "Post")
+        self.assertEqual(ig._active_type, "Reel")
 
         # Test loaded state
         info = VideoInfo(
@@ -131,7 +131,7 @@ class TestResponsiveAndSocial(unittest.TestCase):
         fb = self.win._facebook_page
         self.assertIsInstance(fb, SocialDownloadPage)
         self.assertEqual(fb._platform_id, "facebook")
-        self.assertEqual(list(fb._type_buttons.keys()), ["Reel", "Video", "Post"])
+        self.assertEqual(list(fb._type_buttons.keys()), ["Reel", "Video"])
         self.assertFalse(fb._empty_card.isHidden())
 
         # URL auto-selects Video
@@ -358,11 +358,39 @@ class TestResponsiveAndSocial(unittest.TestCase):
             self.assertEqual(panel._item_widgets[0]._type_badge.text(), "GIF")
             self.assertEqual(panel._item_widgets[0]._title_label.text(), "Funny Animation Meme")
 
+            # Verify platform filter only contains YouTube, Instagram, and Facebook (plus All)
+            plat_items = [panel._platform_filter.itemData(i) for i in range(panel._platform_filter.count())]
+            self.assertEqual(plat_items, ["all", "youtube", "instagram", "facebook"])
+
             # Reset filters
             panel._type_filter.setCurrentIndex(panel._type_filter.findData("all"))
             self.assertEqual(len(panel._item_widgets), 4)
 
             panel.close()
+
+    def test_dark_and_light_theme_switching(self) -> None:
+        """Verify settings panel Appearance group is visible and toggles between Dark and Light themes."""
+        from clipgrab.gui.theme import apply_theme, toggle_theme
+
+        settings = self.win._settings
+        sp = self.win._settings_panel
+
+        # Ensure theme combo and toggle button are available
+        self.assertIsNotNone(sp._theme_combo)
+        self.assertIsNotNone(sp._theme_btn)
+        self.assertEqual(sp._theme_combo.count(), 2)
+
+        # Toggle to Light Theme
+        new_theme = toggle_theme(self.app, settings)
+        self.assertEqual(new_theme, "light")
+        self.assertEqual(self.app.property("current_theme"), "light")
+        self.assertEqual(settings.theme, "light")
+
+        # Toggle back to Dark Theme
+        new_theme = toggle_theme(self.app, settings)
+        self.assertEqual(new_theme, "dark")
+        self.assertEqual(self.app.property("current_theme"), "dark")
+        self.assertEqual(settings.theme, "dark")
 
 
 if __name__ == "__main__":
