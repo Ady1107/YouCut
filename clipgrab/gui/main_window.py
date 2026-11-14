@@ -1,9 +1,9 @@
 """
 YouCut — Main application window.
 
-Restructured with modern collapsible sidebar, Universal Home page (auto-routing),
-one configurable SectionDownloadPage driven by SectionConfig, Queue panel,
-History panel, and Settings panel.
+Restructured with modern fixed sidebar (Images 2-4), QStackedWidget navigation
+strictly by section id (never by index), universal Home page, YouTube clipper page shell,
+Instagram and Facebook section pages, Queue, History, and Settings.
 """
 
 from __future__ import annotations
@@ -13,8 +13,8 @@ import os
 from typing import Any, Optional
 
 import requests
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont, QKeySequence, QPixmap, QShortcut
+from PySide6.QtCore import QPoint, Qt, QTimer
+from PySide6.QtGui import QFont, QKeyEvent, QKeySequence, QPixmap, QResizeEvent, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -39,27 +39,32 @@ from clipgrab.core.updater import UpdateManager
 from clipgrab.core.validator import sanitize_filename, suggest_filename
 from clipgrab.data.history_db import HistoryDB, HistoryEntry
 from clipgrab.gui.sections import (
-    ALL_SECTIONS,
-    SECTION_PINTEREST_VIDEO,
-    SECTION_YOUTUBE_VIDEO,
     SectionConfig,
     get_section_by_id,
     route_url_to_section,
 )
-from clipgrab.gui.theme import toggle_theme
+from clipgrab.gui.theme import (
+    BG_APP,
+    BORDER_DIVIDER,
+    MIN_WINDOW_HEIGHT,
+    MIN_WINDOW_WIDTH,
+    apply_theme,
+    toggle_theme,
+)
 from clipgrab.gui.widgets.history_panel import HistoryPanel
 from clipgrab.gui.widgets.home_page import HomePage
 from clipgrab.gui.widgets.queue_panel import QueuePanel
-from clipgrab.gui.widgets.section_download_page import SectionDownloadPage
+from clipgrab.gui.widgets.social_page import SocialDownloadPage
 from clipgrab.gui.widgets.settings_panel import SettingsPanel
 from clipgrab.gui.widgets.sidebar import Sidebar
 from clipgrab.gui.widgets.toast_notification import ToastNotification, show_toast
+from clipgrab.gui.widgets.youtube_page import YouTubePage
 
 logger = get_logger("main_window")
 
 
 class MainWindow(QMainWindow):
-    """Main application window with modern sidebar and unified stack."""
+    """Main application window with modern sidebar and unified stack navigation by section id."""
 
     def __init__(
         self,
@@ -90,108 +95,113 @@ class MainWindow(QMainWindow):
     def _setup_window(self) -> None:
         """Configure main window title, minimum size, and icon."""
         self.setWindowTitle("YouCut — Universal Video & Media Clipper")
-        self.setMinimumSize(960, 640)
+        self.resize(1176, 784)
+        self.setMinimumSize(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
         app = QApplication.instance()
         if app and not app.windowIcon().isNull():
             self.setWindowIcon(app.windowIcon())
 
+        # Debounced resize timer (50ms) for responsive layout breakpoints
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.setInterval(50)
+        self._resize_timer.timeout.connect(self._on_debounced_resize)
+
     def _setup_ui(self) -> None:
-        """Build the main UI with Sidebar and centered content area."""
+        """Build the main UI with Sidebar and QStackedWidget navigation by section id."""
         central = QWidget()
+        central.setObjectName("centralWidget")
         self.setCentralWidget(central)
         main_layout = QHBoxLayout(central)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
         # ─── 1. Left Sidebar ──────────────────────────────────────────────────
-        self._sidebar = Sidebar(
-            collapsed=getattr(self._settings, "sidebar_collapsed", False),
-            expanded_groups=getattr(self._settings, "expanded_groups", None),
-            last_section=getattr(self._settings, "last_section", "home"),
-        )
+        initial_section = getattr(self._settings, "last_section", "home")
+        if initial_section not in ("home", "youtube", "instagram", "facebook", "queue", "history", "settings"):
+            initial_section = "home"
+
+        self._sidebar = Sidebar(last_section=initial_section)
         main_layout.addWidget(self._sidebar)
 
         # Subtle vertical separator
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.VLine)
-        sep.setStyleSheet("background-color: rgba(255, 255, 255, 0.08);")
+        sep.setStyleSheet(f"background-color: {BORDER_DIVIDER};")
         sep.setFixedWidth(1)
         main_layout.addWidget(sep)
 
-        # ─── 2. Content Stack Area ────────────────────────────────────────────
+        # ─── 2. Content Stack Area (Navigation by Section ID) ─────────────────
         self._stack = QStackedWidget()
+        self._pages: dict[str, QWidget] = {}
 
-        # Page 0: Home Page
+        # Page instances
         self._home_page = HomePage(self._history_db)
-        self._stack.addWidget(self._home_page)
+        self._youtube_page = YouTubePage(self._settings)
 
-        # Page 1: Configurable Shared Section Download Page
-        self._section_page = SectionDownloadPage(self._settings)
-        self._stack.addWidget(self._section_page)
+        self._instagram_page = SocialDownloadPage("instagram", self._settings)
+        self._facebook_page = SocialDownloadPage("facebook", self._settings)
 
-        # Page 2: Queue Panel
         self._queue_panel = QueuePanel(self._queue_manager)
-        self._stack.addWidget(self._queue_panel)
-
-        # Page 3: History Panel
         self._history_panel = HistoryPanel(self._history_db)
-        self._stack.addWidget(self._history_panel)
-
-        # Page 4: Settings Panel
         self._settings_panel = SettingsPanel(self._settings, self._update_manager)
-        self._stack.addWidget(self._settings_panel)
+
+        # Register pages strictly by section id
+        self._pages["home"] = self._home_page
+        self._pages["youtube"] = self._youtube_page
+        self._pages["instagram"] = self._instagram_page
+        self._pages["facebook"] = self._facebook_page
+        self._pages["queue"] = self._queue_panel
+        self._pages["history"] = self._history_panel
+        self._pages["settings"] = self._settings_panel
+
+        for page in self._pages.values():
+            self._stack.addWidget(page)
 
         main_layout.addWidget(self._stack, stretch=1)
 
         # ─── 3. Status Bar ────────────────────────────────────────────────────
         self._status_bar = QStatusBar()
         self._status_bar.setFont(QFont("Segoe UI", 9))
+        self._status_bar.setMinimumHeight(26)
         self.setStatusBar(self._status_bar)
         self._status_bar.showMessage("Ready")
 
-        # Apply initial theme to custom widgets
-        self._sidebar.update_theme(self._settings.theme)
-        self._home_page.update_theme(self._settings.theme)
-        self._section_page.update_theme(self._settings.theme)
-
-        # Select Home on startup
-        self._sidebar.select_target("home", "home")
-        self._stack.setCurrentIndex(0)
+        # Initial navigation to requested/saved section
+        self.show_page(initial_section)
 
     def _setup_shortcuts(self) -> None:
         """Register application keyboard shortcuts."""
         # Ctrl+0: Home
-        QShortcut(QKeySequence("Ctrl+0"), self, lambda: self._sidebar.select_target("home", "home"))
-        # Ctrl+1..3: Platform groups
-        QShortcut(QKeySequence("Ctrl+1"), self, lambda: self._sidebar.select_target("section", "youtube_video"))
-        QShortcut(QKeySequence("Ctrl+2"), self, lambda: self._sidebar.select_target("section", "instagram_reel"))
-        QShortcut(QKeySequence("Ctrl+3"), self, lambda: self._sidebar.select_target("section", "facebook_video"))
-        # Ctrl+B: Toggle rail
-        QShortcut(QKeySequence("Ctrl+B"), self, self._sidebar.toggle_rail)
+        QShortcut(QKeySequence("Ctrl+0"), self, lambda: self.show_page("home"))
+        # Ctrl+1..3: Platforms
+        QShortcut(QKeySequence("Ctrl+1"), self, lambda: self.show_page("youtube"))
+        QShortcut(QKeySequence("Ctrl+2"), self, lambda: self.show_page("instagram"))
+        QShortcut(QKeySequence("Ctrl+3"), self, lambda: self.show_page("facebook"))
 
     def _connect_signals(self) -> None:
         """Wire up all inter-component signals."""
         # Sidebar navigation
-        self._sidebar.navigation_requested.connect(self._on_sidebar_navigation)
-        self._sidebar.rail_toggled.connect(self._on_rail_toggled)
-        self._sidebar.group_toggled.connect(self._on_group_toggled)
+        self._sidebar.navigation_requested.connect(self.show_page)
 
         # Home page routing
         self._home_page.route_requested.connect(self._on_home_route_requested)
         self._home_page.status_message.connect(self._status_bar.showMessage)
 
-        # Section page routing & controls
-        self._section_page.switch_section_requested.connect(self._on_switch_section_requested)
-        self._section_page.status_message.connect(self._status_bar.showMessage)
+        # YouTube page signals
+        self._youtube_page.status_message.connect(self._status_bar.showMessage)
+        self._youtube_page.status_pill_update.connect(self._sidebar.set_status)
+        self._youtube_page.add_to_queue_requested.connect(self._on_youtube_add_to_queue)
+        self._youtube_page.download_requested.connect(self._on_youtube_download_now)
+        self._youtube_page.switch_platform_requested.connect(self.show_page)
+        self._youtube_page.info_fetched.connect(self._on_youtube_info_fetched)
 
-        # URL fetch signals from section page
-        self._section_page.url_input.info_fetched.connect(self._on_info_fetched)
-        self._section_page.url_input.fetch_failed.connect(self._on_fetch_failed)
-
-        # Download controls in section page
-        self._section_page.download_controls.add_to_queue_clicked.connect(self._on_add_to_queue)
-        self._section_page.download_controls.download_now_clicked.connect(self._on_download_now)
-        self._section_page.download_controls.output_folder_changed.connect(self._on_output_folder_changed)
+        # Instagram & Facebook page signals
+        for p_page in (self._instagram_page, self._facebook_page):
+            p_page.download_requested.connect(self._on_social_download_now)
+            p_page.status_message.connect(self._status_bar.showMessage)
+            p_page.switch_platform_requested.connect(self.show_page)
+            p_page.info_fetched.connect(self._on_social_info_fetched)
 
         # Queue manager events
         self._queue_manager.item_updated.connect(self._on_queue_item_updated)
@@ -206,9 +216,7 @@ class MainWindow(QMainWindow):
             lambda msg: show_toast(self, msg, toast_type="info")
         )
         self._update_manager.update_installed.connect(self._on_ytdlp_updated)
-        self._update_manager.app_update_available.connect(
-            self._settings_panel.show_app_update_banner
-        )
+        self._update_manager.app_update_available.connect(self._on_app_update_available)
 
         # Settings panel
         self._settings_panel.theme_toggle_requested.connect(self._on_theme_toggle)
@@ -223,7 +231,7 @@ class MainWindow(QMainWindow):
         self._queue_panel.queue_action.connect(lambda _: self._update_queue_badge())
 
     def _start_background_services(self) -> None:
-        """Start background services (update checker, etc.) with tracked timers."""
+        """Start background services with tracked timers."""
         self._update_manager.auto_update = self._settings.auto_update_ytdlp
         self._update_manager.app_update_url = getattr(self._settings, "app_update_url", "")
         self._update_manager.set_last_check_from_config(self._settings.last_update_check)
@@ -246,14 +254,64 @@ class MainWindow(QMainWindow):
         self._clipboard_timer.timeout.connect(self.check_clipboard_for_url)
         self._clipboard_timer.start()
 
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        """Handle resize events with debounced breakpoint recalculation."""
+        super().resizeEvent(event)
+        if hasattr(self, "_resize_timer"):
+            self._resize_timer.start()
+
+    def _on_debounced_resize(self) -> None:
+        """Evaluate breakpoints (Wide >=1280, Medium 960-1279, Narrow <960) and notify sidebar/pages."""
+        w = self.width()
+        if w >= 1280:
+            bp = "wide"
+            if hasattr(self, "_sidebar"):
+                self._sidebar.set_collapsed(False)
+        elif w >= 960:
+            bp = "medium"
+            if hasattr(self, "_sidebar"):
+                self._sidebar.set_collapsed(True)
+        else:
+            bp = "narrow"
+            if hasattr(self, "_sidebar"):
+                self._sidebar.set_collapsed(True)
+
+        if hasattr(self, "_pages"):
+            for page in self._pages.values():
+                if hasattr(page, "set_breakpoint"):
+                    page.set_breakpoint(bp, w)
+
     def _restore_geometry(self) -> None:
-        """Restore window position and size from settings."""
-        self.setGeometry(
-            self._settings.window_x,
-            self._settings.window_y,
-            self._settings.window_width,
-            self._settings.window_height,
-        )
+        """Restore window position and size from settings, clamped to visible screen area."""
+        x = getattr(self._settings, "window_x", 100)
+        y = getattr(self._settings, "window_y", 100)
+        w = max(getattr(self._settings, "window_width", 1176), MIN_WINDOW_WIDTH)
+        h = max(getattr(self._settings, "window_height", 784), MIN_WINDOW_HEIGHT)
+
+        # Detect screen containing (x, y) or fallback to primary screen
+        screen = QApplication.screenAt(QPoint(x, y))
+        if not screen:
+            screen = QApplication.primaryScreen()
+
+        if screen:
+            avail = screen.availableGeometry()
+            # Ensure window is not larger than screen
+            w = min(w, avail.width())
+            h = min(h, avail.height())
+            w = max(w, MIN_WINDOW_WIDTH)
+            h = max(h, MIN_WINDOW_HEIGHT)
+            # Clamp position within screen bounds with at least titlebar visible
+            x = max(avail.left(), min(x, avail.right() - 100))
+            y = max(avail.top(), min(y, avail.bottom() - 100))
+            self.setGeometry(x, y, w, h)
+        else:
+            self.setGeometry(x, y, w, h)
+
+        if getattr(self._settings, "window_maximized", False):
+            self.showMaximized()
+
+        # Trigger initial breakpoint evaluation
+        QTimer.singleShot(0, self._on_debounced_resize)
 
     def closeEvent(self, event) -> None:
         """Clean shutdown with zero orphan processes."""
@@ -286,9 +344,15 @@ class MainWindow(QMainWindow):
             logger.error("Error shutting down UpdateManager: %s", e)
 
         try:
-            self._section_page.url_input.shutdown()
+            self._youtube_page._shutdown_fetch_worker()
         except Exception as e:
-            logger.error("Error shutting down UrlInputWidget: %s", e)
+            logger.error("Error shutting down YouTube fetch worker: %s", e)
+
+        try:
+            self._instagram_page.shutdown()
+            self._facebook_page.shutdown()
+        except Exception as e:
+            logger.error("Error shutting down social pages: %s", e)
 
         try:
             self._queue_manager.shutdown()
@@ -310,16 +374,28 @@ class MainWindow(QMainWindow):
             logger.warning("Error shutting down SettingsPanel: %s", e)
 
         try:
-            geo = self.geometry()
+            is_max = self.isMaximized()
+            if is_max:
+                normal_geo = self.normalGeometry()
+                win_x = normal_geo.x()
+                win_y = normal_geo.y()
+                win_w = normal_geo.width()
+                win_h = normal_geo.height()
+            else:
+                geo = self.geometry()
+                win_x = geo.x()
+                win_y = geo.y()
+                win_w = geo.width()
+                win_h = geo.height()
+
             self._settings.update(
-                window_x=geo.x(),
-                window_y=geo.y(),
-                window_width=geo.width(),
-                window_height=geo.height(),
+                window_x=win_x,
+                window_y=win_y,
+                window_width=win_w,
+                window_height=win_h,
+                window_maximized=is_max,
                 last_update_check=self._update_manager.get_last_check_iso(),
-                sidebar_collapsed=self._sidebar.is_collapsed(),
-                expanded_groups=self._sidebar.get_expanded_groups(),
-                last_section=self._sidebar.get_active_target(),
+                last_section=self._sidebar.get_active_page(),
             )
         except Exception as e:
             logger.error("Error saving settings on close: %s", e)
@@ -328,216 +404,253 @@ class MainWindow(QMainWindow):
         event.accept()
         super().closeEvent(event)
 
-    # ─── Navigation Handlers ──────────────────────────────────────────────────
+    # ─── Navigation Handlers (Strictly by Section ID) ─────────────────────────
 
-    def _on_sidebar_navigation(self, page_type: str, target_id: str) -> None:
-        """Handle navigation requests from the sidebar."""
+    def show_page(self, page_id: str) -> None:
+        """Navigate to page identified by page_id."""
         self._update_manager.reset_idle_timer()
 
-        if page_type == "home":
-            self._stack.setCurrentIndex(0)
+        # Normalize target ID
+        norm_id = page_id.lower()
+        if norm_id.startswith("youtube"):
+            norm_id = "youtube"
+        elif norm_id.startswith("instagram"):
+            norm_id = "instagram"
+        elif norm_id.startswith("facebook"):
+            norm_id = "facebook"
+
+        if norm_id not in self._pages:
+            logger.warning("Unknown section ID requested: %s", page_id)
+            norm_id = "home"
+
+        target_widget = self._pages[norm_id]
+        self._stack.setCurrentWidget(target_widget)
+        self._sidebar.select_page(norm_id, notify=False)
+
+        # Status bar messaging per page
+        messages = {
+            "home": "Home — Paste any link",
+            "youtube": "YouTube — Video & Audio Clipper",
+            "instagram": "Instagram — Reel & Post Download",
+            "facebook": "Facebook — Video & Reel Download",
+            "queue": "Download Queue",
+            "history": "Download History",
+            "settings": "Settings",
+        }
+        self._status_bar.showMessage(messages.get(norm_id, "Ready"))
+
+        if norm_id == "home":
             self._home_page.refresh_recent_downloads()
-            self._status_bar.showMessage("Home — Paste any link")
-        elif page_type == "section":
-            config = get_section_by_id(target_id)
-            self._section_page.configure_section(config)
-            self._stack.setCurrentIndex(1)
-            self._status_bar.showMessage(f"Section: {config.title}")
-        elif page_type == "queue":
-            self._stack.setCurrentIndex(2)
-            self._status_bar.showMessage("Download Queue")
-        elif page_type == "history":
+        elif norm_id == "history":
             self._history_panel.refresh()
-            self._stack.setCurrentIndex(3)
-            self._status_bar.showMessage("Download History")
-        elif page_type == "settings":
-            self._stack.setCurrentIndex(4)
-            self._status_bar.showMessage("Settings")
 
     def _on_home_route_requested(self, section_id: str, url: str, auto_fetch: bool) -> None:
-        """Route from Universal Home page to Section page with prefilled URL."""
-        config = get_section_by_id(section_id)
-        self._sidebar.select_target("section", section_id)
-        self._section_page.configure_section(config, carry_url=url, auto_fetch=auto_fetch)
-        self._stack.setCurrentIndex(1)
-        if url:
-            self._status_bar.showMessage(f"Opening {config.title} with URL...")
+        """Route from Universal Home page to platform page with prefilled URL."""
+        norm_id = section_id.lower()
+        if norm_id.startswith("youtube"):
+            norm_id = "youtube"
+            self.show_page("youtube")
+            if url:
+                self._youtube_page.set_url(url, auto_fetch=auto_fetch)
+        elif norm_id.startswith("instagram"):
+            norm_id = "instagram"
+            self.show_page("instagram")
+            if url:
+                self._instagram_page.set_url(url)
+        elif norm_id.startswith("facebook"):
+            norm_id = "facebook"
+            self.show_page("facebook")
+            if url:
+                self._facebook_page.set_url(url)
+        else:
+            self.show_page(norm_id)
 
     def _on_switch_section_requested(self, target_section_id: str, url: str, auto_fetch: bool) -> None:
-        """Switch section from wrong-section banner or reroute dropdown."""
-        config = get_section_by_id(target_section_id)
-        self._sidebar.select_target("section", target_section_id)
-        self._section_page.configure_section(config, carry_url=url, auto_fetch=auto_fetch)
-        self._stack.setCurrentIndex(1)
-
-    def _on_rail_toggled(self, collapsed: bool) -> None:
-        self._settings.sidebar_collapsed = collapsed
-
-    def _on_group_toggled(self, group_id: str, is_expanded: bool) -> None:
-        self._settings.expanded_groups = self._sidebar.get_expanded_groups()
+        """Switch section from wrong-section banner."""
+        self._on_home_route_requested(target_section_id, url, auto_fetch)
 
     # ─── Download & Fetch Pipeline Handlers ────────────────────────────────────
 
-    def _on_info_fetched(self, video_info: VideoInfo) -> None:
-        """Handle successful media info fetch in the Section page."""
+    def _on_social_info_fetched(self, video_info: VideoInfo) -> None:
+        """Handle successful media info fetch from Instagram/Facebook."""
         self._current_video_info = video_info
+        if video_info.thumbnail_url:
+            self._cache_thumbnail(video_info)
+        self._status_bar.showMessage(f"Fetched: {video_info.title}")
 
-        # Auto-switch Pinterest Image -> Pinterest Video if video formats detected
-        current_cfg = self._section_page.get_current_config()
-        if (
-            current_cfg.id == "pinterest_image"
-            and (video_info.video_formats or video_info.duration > 0)
-        ):
-            logger.info("Pinterest pin contains video, auto-switching to Pinterest Video")
-            self._sidebar.select_target("section", SECTION_PINTEREST_VIDEO.id)
-            self._section_page.configure_section(SECTION_PINTEREST_VIDEO)
-            show_toast(self, "Detected Video Pin — switched to Video Download", toast_type="info")
+    def _on_social_download_now(self, req: DownloadRequest, info: VideoInfo) -> None:
+        """Add social download request to queue and start downloading immediately."""
+        video_label = ""
+        if req.video_format:
+            video_label = req.video_format.display_label() if hasattr(req.video_format, "display_label") else getattr(req.video_format, "resolution", "")
+        audio_label = ""
+        if req.audio_format:
+            audio_label = req.audio_format.display_label() if hasattr(req.audio_format, "display_label") else getattr(req.audio_format, "abr", "")
 
-        # Populate formats
-        self._section_page.format_selector.populate_formats(video_info)
+        if req.audio_only and not audio_label:
+            audio_label = req.merge_format.upper() if req.merge_format else "Audio"
+        if not req.audio_only and not video_label:
+            video_label = "1080p"
 
-        # Populate time range
-        self._section_page.time_range.set_duration(video_info.duration)
+        out_ext = req.merge_format if req.merge_format else ("mp4" if not req.audio_only else "mp3")
+        fname = req.filename if req.filename.endswith(f".{out_ext}") else f"{req.filename}.{out_ext}"
+        out_path = os.path.join(req.output_dir, fname)
 
-        # Suggest filename
-        suggested = suggest_filename(video_info.title)
-        self._section_page.download_controls.set_filename(suggested)
+        if getattr(req, "convert_to_gif", False):
+            download_type = "GIF"
+        elif req.audio_only:
+            download_type = "AUDIO ONLY"
+        elif req.video_format and not req.audio_format and not getattr(req, "merge_format", None):
+            download_type = "VIDEO ONLY"
+        else:
+            download_type = "VIDEO + AUDIO"
 
-        # Enable action buttons
-        self._section_page.download_controls.set_actions_enabled(True)
-
-        self._status_bar.showMessage(
-            f"Fetched: {video_info.title} ({len(video_info.video_formats)} video, "
-            f"{len(video_info.audio_formats)} audio formats)"
+        item = QueueItem(
+            url=req.url,
+            title=info.title,
+            thumbnail_url=info.thumbnail_url,
+            duration=info.duration,
+            video_format_label=video_label,
+            audio_format_label=audio_label,
+            output_path=out_path,
+            download_request=req,
+            download_type=download_type,
+            platform_id=req.platform_id,
         )
+        thumb_path = self._get_thumbnail_cache_path(info)
+        if thumb_path and os.path.isfile(thumb_path):
+            item.thumbnail_path = thumb_path
 
+        self._queue_manager.add_item(item)
+        self._update_queue_badge()
+        if not self._queue_manager.is_processing:
+            self._queue_manager.start_processing()
+        self._status_bar.showMessage(f"Downloading: {item.title}")
+        self.show_page("queue")
+
+    def _on_youtube_info_fetched(self, video_info: VideoInfo) -> None:
+        self._current_video_info = video_info
         if video_info.thumbnail_url:
             self._cache_thumbnail(video_info)
 
-    def _on_fetch_failed(self, error_msg: str, is_extraction_error: bool) -> None:
-        """Handle failed info fetch."""
-        self._current_video_info = None
-        self._section_page.format_selector.clear_formats()
-        self._section_page.time_range.reset()
-        self._section_page.download_controls.set_actions_enabled(False)
-        self._status_bar.showMessage("Fetch failed")
+    def _on_youtube_add_to_queue(self, payload: dict) -> None:
+        req = payload["request"]
+        info: VideoInfo = payload["video_info"]
+        start_sec = payload.get("start_seconds")
+        end_sec = payload.get("end_seconds")
+        from clipgrab.gui.widgets.youtube_page import _format_time
 
-        if is_extraction_error:
-            self._update_manager.on_extraction_error()
-            show_toast(
-                self,
-                "Extraction error — checking for yt-dlp update...",
-                toast_type="warning",
-            )
+        video_label = ""
+        if req.video_format:
+            video_label = req.video_format.display_label() if hasattr(req.video_format, "display_label") else getattr(req.video_format, "resolution", "")
+        audio_label = ""
+        if req.audio_format:
+            audio_label = req.audio_format.display_label() if hasattr(req.audio_format, "display_label") else getattr(req.audio_format, "abr", "")
 
-    def _on_add_to_queue(self) -> None:
-        """Add current configuration to queue."""
-        item = self._build_queue_item()
-        if item is None:
-            return
+        if req.audio_only and not audio_label:
+            audio_label = req.merge_format.upper() if req.merge_format else "Audio"
+        if not req.audio_only and not video_label:
+            video_label = "Best available"
+
+        out_ext = req.merge_format if req.merge_format else ("mp4" if not req.audio_only else "mp3")
+        fname = req.filename if req.filename.endswith(f".{out_ext}") else f"{req.filename}.{out_ext}"
+        out_path = os.path.join(req.output_dir, fname)
+
+        if getattr(req, "convert_to_gif", False):
+            download_type = "GIF"
+        elif req.audio_only:
+            download_type = "AUDIO ONLY"
+        elif req.video_format and not req.audio_format and not getattr(req, "merge_format", None):
+            download_type = "VIDEO ONLY"
+        else:
+            download_type = "VIDEO + AUDIO"
+
+        item = QueueItem(
+            url=req.url,
+            title=info.title,
+            thumbnail_url=info.thumbnail_url,
+            start_time=_format_time(start_sec) if start_sec is not None else None,
+            end_time=_format_time(end_sec) if end_sec is not None else None,
+            start_seconds=start_sec,
+            end_seconds=end_sec,
+            duration=info.duration,
+            video_format_label=video_label,
+            audio_format_label=audio_label,
+            output_path=out_path,
+            download_request=req,
+            download_type=download_type,
+            platform_id="youtube",
+        )
+        thumb_path = self._get_thumbnail_cache_path(info)
+        if thumb_path and os.path.isfile(thumb_path):
+            item.thumbnail_path = thumb_path
 
         self._queue_manager.add_item(item)
         self._update_queue_badge()
         self._status_bar.showMessage(f"Added to queue: {item.title}")
         show_toast(self, f"Added to queue: {item.title}", toast_type="success")
+        self.show_page("queue")
 
-        # Switch to Queue
-        self._sidebar.select_target("queue", "queue")
+    def _on_youtube_download_now(self, payload: dict) -> None:
+        req = payload["request"]
+        info: VideoInfo = payload["video_info"]
+        start_sec = payload.get("start_seconds")
+        end_sec = payload.get("end_seconds")
+        from clipgrab.gui.widgets.youtube_page import _format_time
 
-    def _on_download_now(self) -> None:
-        """Add to queue and start processing immediately."""
-        item = self._build_queue_item()
-        if item is None:
-            return
+        video_label = ""
+        if req.video_format:
+            video_label = req.video_format.display_label() if hasattr(req.video_format, "display_label") else getattr(req.video_format, "resolution", "")
+        audio_label = ""
+        if req.audio_format:
+            audio_label = req.audio_format.display_label() if hasattr(req.audio_format, "display_label") else getattr(req.audio_format, "abr", "")
 
-        self._queue_manager.add_item(item)
-        self._update_queue_badge()
+        if req.audio_only and not audio_label:
+            audio_label = req.merge_format.upper() if req.merge_format else "Audio"
+        if not req.audio_only and not video_label:
+            video_label = "Best available"
 
-        if not self._queue_manager.is_processing:
-            self._queue_manager.start_processing()
+        out_ext = req.merge_format if req.merge_format else ("mp4" if not req.audio_only else "mp3")
+        fname = req.filename if req.filename.endswith(f".{out_ext}") else f"{req.filename}.{out_ext}"
+        out_path = os.path.join(req.output_dir, fname)
 
-        self._status_bar.showMessage(f"Downloading: {item.title}")
-        self._sidebar.select_target("queue", "queue")
-
-    def _build_queue_item(self) -> Optional[QueueItem]:
-        """Build QueueItem from section page state."""
-        if self._current_video_info is None:
-            show_toast(self, "Please fetch media info first", toast_type="warning")
-            return None
-
-        cfg = self._section_page.get_current_config()
-
-        # Validate time range if clipping panel applies
-        if cfg.show_clip:
-            is_valid, msg = self._section_page.time_range.validate()
-            if not is_valid:
-                show_toast(self, msg, toast_type="error")
-                return None
-            start_seconds = self._section_page.time_range.get_start_seconds()
-            end_seconds = self._section_page.time_range.get_end_seconds()
-            start_time = self._section_page.time_range.get_start_time()
-            end_time = self._section_page.time_range.get_end_time()
-            frame_accurate = self._section_page.time_range.is_frame_accurate
+        if getattr(req, "convert_to_gif", False):
+            download_type = "GIF"
+        elif req.audio_only:
+            download_type = "AUDIO ONLY"
+        elif req.video_format and not req.audio_format and not getattr(req, "merge_format", None):
+            download_type = "VIDEO ONLY"
         else:
-            start_seconds = None
-            end_seconds = None
-            start_time = None
-            end_time = None
-            frame_accurate = False
-
-        filename = self._section_page.download_controls.get_filename()
-        if not filename:
-            filename = suggest_filename(self._current_video_info.title)
-
-        video_format = self._section_page.format_selector.get_selected_video_format()
-        audio_format = self._section_page.format_selector.get_selected_audio_format()
-        audio_only = self._section_page.format_selector.is_audio_only or cfg.audio_only
-        audio_output_fmt = self._section_page.format_selector.get_audio_output_format()
-
-        if start_time and end_time and cfg.show_clip and not self._section_page.time_range.is_full_video:
-            filename = suggest_filename(
-                self._current_video_info.title, start_time, end_time
-            )
-
-        output_dir = self._section_page.download_controls.get_output_folder()
-        merge_fmt = getattr(self._settings, "default_merge_format", "mp4") or "mp4"
-
-        request = DownloadRequest(
-            url=self._section_page.url_input.get_url(),
-            output_dir=output_dir,
-            filename=sanitize_filename(filename),
-            video_format=video_format,
-            audio_format=audio_format,
-            audio_only=audio_only,
-            audio_output_format=audio_output_fmt,
-            start_time=start_seconds,
-            end_time=end_seconds,
-            merge_format=merge_fmt if not audio_only else (audio_output_fmt.value if audio_output_fmt else "mp3"),
-            frame_accurate_clipping=frame_accurate,
-            convert_to_gif=self._section_page.format_selector.is_gif_selected() or cfg.id == "x_gif",
-            concurrent_fragments=getattr(self._settings, "concurrent_fragments", 16),
-        )
+            download_type = "VIDEO + AUDIO"
 
         item = QueueItem(
-            url=self._section_page.url_input.get_url(),
-            title=self._current_video_info.title,
-            thumbnail_url=self._current_video_info.thumbnail_url,
-            start_time=start_time,
-            end_time=end_time,
-            start_seconds=start_seconds,
-            end_seconds=end_seconds,
-            duration=self._current_video_info.duration,
-            video_format_label=self._section_page.format_selector.get_selected_video_label(),
-            audio_format_label=self._section_page.format_selector.get_selected_audio_label(),
-            download_request=request,
-            platform_id=cfg.platform_id,
+            url=req.url,
+            title=info.title,
+            thumbnail_url=info.thumbnail_url,
+            start_time=_format_time(start_sec) if start_sec is not None else None,
+            end_time=_format_time(end_sec) if end_sec is not None else None,
+            start_seconds=start_sec,
+            end_seconds=end_sec,
+            duration=info.duration,
+            video_format_label=video_label,
+            audio_format_label=audio_label,
+            output_path=out_path,
+            download_request=req,
+            download_type=download_type,
+            platform_id="youtube",
         )
-
-        thumb_path = self._get_thumbnail_cache_path(self._current_video_info)
+        thumb_path = self._get_thumbnail_cache_path(info)
         if thumb_path and os.path.isfile(thumb_path):
             item.thumbnail_path = thumb_path
 
-        return item
+        self._queue_manager.add_item(item)
+        self._update_queue_badge()
+        if not self._queue_manager.is_processing:
+            self._queue_manager.start_processing()
+        self._status_bar.showMessage(f"Downloading: {item.title}")
+        self.show_page("queue")
+
+
 
     def _on_queue_item_updated(self, index: int) -> None:
         """Handle queue item update and history recording."""
@@ -546,14 +659,10 @@ class MainWindow(QMainWindow):
         if item is None:
             return
 
-        if item.status == QueueItemStatus.WARNING:
-            # Don't add to History as a success!
-            show_toast(
-                self,
-                f"Finished with warning: {item.warning_reason}",
-                toast_type="warning",
-                duration_ms=6000,
-            )
+        if item.status == QueueItemStatus.DOWNLOADING:
+            idx = index + 1
+            total = self._queue_manager.item_count()
+            self._sidebar.set_status(f"Downloading {idx} of {total}", state="downloading")
         elif item.status == QueueItemStatus.DONE:
             self._history_db.add_entry(
                 title=item.title,
@@ -569,15 +678,11 @@ class MainWindow(QMainWindow):
             show_toast(self, f"Download complete: {item.title}", toast_type="success")
             self._home_page.refresh_recent_downloads()
         elif item.status == QueueItemStatus.FAILED:
-            show_toast(
-                self,
-                f"Download failed: {item.error_msg[:100]}",
-                toast_type="error",
-                duration_ms=8000,
-            )
+            show_toast(self, f"Download failed: {item.error_msg[:100]}", toast_type="error", duration_ms=8000)
 
     def _on_queue_finished(self) -> None:
         self._update_queue_badge()
+        self._sidebar.set_status("Ready to clip", state="ready")
         self._status_bar.showMessage("Queue finished")
         show_toast(self, "All downloads complete!", toast_type="success")
 
@@ -585,9 +690,10 @@ class MainWindow(QMainWindow):
         self._update_queue_badge()
         if not self._queue_manager.is_busy:
             self._update_manager.set_queue_busy(False)
+            self._sidebar.set_status("Ready to clip", state="ready")
 
     def _update_queue_badge(self) -> None:
-        """Update the sidebar badge with active + pending count."""
+        """Update sidebar badge with active + pending count."""
         items = self._queue_manager.get_items()
         count = sum(
             1 for it in items
@@ -595,21 +701,26 @@ class MainWindow(QMainWindow):
         )
         self._sidebar.set_queue_count(count)
 
-    def _on_output_folder_changed(self, folder: str) -> None:
-        self._settings.update(last_output_folder=folder)
-        self._section_page.save_section_preference("output_folder", folder)
+    def _on_app_update_available(self, version: str, notes: str, url: str) -> None:
+        self._sidebar.set_status("Update available", state="update")
+        self._settings_panel.show_app_update_banner(version, notes, url)
 
     def _on_theme_toggle(self) -> None:
         app = QApplication.instance()
         if app:
-            new_theme = toggle_theme(app, self._settings)
-            self._settings_panel.update_theme_button(new_theme)
-            self._sidebar.update_theme(new_theme)
-            self._home_page.update_theme(new_theme)
-            self._section_page.update_theme(new_theme)
+            toggle_theme(app, self._settings)
 
     def _on_settings_changed(self) -> None:
-        self._section_page.download_controls.set_output_folder(self._settings.last_output_folder)
+        folder = self._settings.last_output_folder
+        if hasattr(self, "_instagram_page"):
+            self._instagram_page._full_folder_path = folder
+            self._instagram_page._folder_input.setText(folder)
+        if hasattr(self, "_facebook_page"):
+            self._facebook_page._full_folder_path = folder
+            self._facebook_page._folder_input.setText(folder)
+        if hasattr(self, "_youtube_page"):
+            self._youtube_page._full_folder_path = folder
+            self._youtube_page._update_text_elisions()
 
     def _on_ytdlp_updated(self, new_version: str) -> None:
         self._settings.update(last_ytdlp_version=new_version)
@@ -617,22 +728,20 @@ class MainWindow(QMainWindow):
 
     def _on_redownload_requested(self, entry: HistoryEntry) -> None:
         target_sec, _ = route_url_to_section(entry.url)
-        self._sidebar.select_target("section", target_sec.id)
-        self._section_page.configure_section(target_sec, carry_url=entry.url, auto_fetch=True)
-        self._stack.setCurrentIndex(1)
+        self._on_home_route_requested(target_sec.id, entry.url, True)
         self._status_bar.showMessage(f"Re-downloading: {entry.title}")
 
     # ─── Thumbnail & Clipboard Helpers ────────────────────────────────────────
 
     def _cache_thumbnail(self, video_info: VideoInfo) -> None:
-        """Download and cache the video thumbnail."""
         if not video_info.thumbnail_url:
             return
-
         cache_path = self._get_thumbnail_cache_path(video_info)
         if cache_path and os.path.isfile(cache_path):
             pix = QPixmap(cache_path)
-            self._section_page.set_thumbnail_preview(pix)
+            cur = self._stack.currentWidget()
+            if hasattr(cur, "set_thumbnail_preview"):
+                cur.set_thumbnail_preview(pix)
             return
 
         def _download():
@@ -644,7 +753,7 @@ class MainWindow(QMainWindow):
                     with open(cache_path, "wb") as f:
                         f.write(resp.content)
                     pix = QPixmap(cache_path)
-                    QTimer.singleShot(0, lambda: self._section_page.set_thumbnail_preview(pix))
+                    QTimer.singleShot(0, lambda: self._apply_thumbnail(pix))
             except Exception as e:
                 logger.debug("Thumbnail cache failed: %s", e)
 
@@ -653,6 +762,11 @@ class MainWindow(QMainWindow):
         thread = threading.Thread(target=_download, daemon=True)
         self._thumbnail_threads.append(thread)
         thread.start()
+
+    def _apply_thumbnail(self, pix: QPixmap) -> None:
+        cur = self._stack.currentWidget()
+        if hasattr(cur, "set_thumbnail_preview"):
+            cur.set_thumbnail_preview(pix)
 
     def _get_thumbnail_cache_path(self, video_info: VideoInfo) -> Optional[str]:
         if not video_info.url:
@@ -668,17 +782,34 @@ class MainWindow(QMainWindow):
         clipboard = QApplication.clipboard()
         if clipboard is None:
             return
-
         text = clipboard.text().strip()
         if not text:
             return
-
         if is_supported(text):
             self._home_page.set_url(text)
-            show_toast(
-                self,
-                "Media link detected in clipboard — ready on Home",
-                toast_type="info",
-                duration_ms=3000,
-            )
+            show_toast(self, "Media link detected in clipboard — ready on Home", toast_type="info", duration_ms=3000)
             logger.info("Clipboard auto-detected: %s", text[:60])
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        """Route clipping shortcuts (I, O, Space) when not editing input fields."""
+        focus = QApplication.focusWidget()
+        from PySide6.QtWidgets import QAbstractSpinBox, QLineEdit, QPlainTextEdit, QTextEdit
+        if isinstance(focus, (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox)):
+            super().keyPressEvent(event)
+            return
+
+        if hasattr(self, "_youtube_page") and self._stack.currentWidget() == self._youtube_page:
+            if event.key() == Qt.Key.Key_I:
+                self._youtube_page._on_shortcut_in_point()
+                event.accept()
+                return
+            elif event.key() == Qt.Key.Key_O:
+                self._youtube_page._on_shortcut_out_point()
+                event.accept()
+                return
+            elif event.key() == Qt.Key.Key_Space:
+                self._youtube_page._toggle_play_pause()
+                event.accept()
+                return
+
+        super().keyPressEvent(event)
