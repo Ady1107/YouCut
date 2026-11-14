@@ -161,6 +161,66 @@ class TestResponsiveAndSocial(unittest.TestCase):
         self.assertLessEqual(geo.width(), screen.width())
         self.assertLessEqual(geo.height(), screen.height())
 
+    def test_social_fetch_url_detection_and_worker_setup(self) -> None:
+        """Verify Instagram and Facebook URL variants are recognized and fetch worker initializes properly."""
+        from clipgrab.core.platforms import detect_platform
+
+        ig_urls = [
+            "https://www.instagram.com/reel/C7Xxyz/",
+            "https://www.instagram.com/reels/C7Xxyz/",
+            "https://www.instagram.com/p/C7Xxyz/?igsh=MWQ1",
+            "https://instagr.am/p/C7Xxyz",
+            "https://instagr.am/reel/C7Xxyz",
+            "https://www.instagram.com/share/p/C7Xxyz/",
+            "https://www.instagram.com/share/r/C7Xxyz/",
+            "https://m.instagram.com/reels/C7Xxyz/",
+        ]
+        for u in ig_urls:
+            p = detect_platform(u)
+            self.assertEqual(p.id, "instagram", f"Failed detecting {u}")
+
+        fb_urls = [
+            "https://www.facebook.com/share/r/17qWxyz/",
+            "https://www.facebook.com/share/v/17qWxyz/",
+            "https://www.facebook.com/share/17qWxyz/",
+            "https://facebook.com/reel/123456789012345",
+            "https://facebook.com/reel/DA123456789",
+            "https://m.facebook.com/reel/1234567890",
+            "https://web.facebook.com/watch/?v=123456789",
+            "https://fb.com/watch/?v=123456789",
+            "https://fb.watch/xyz123/",
+        ]
+        for u in fb_urls:
+            p = detect_platform(u)
+            self.assertEqual(p.id, "facebook", f"Failed detecting {u}")
+
+        # Test fetch worker initialization on Instagram page
+        from unittest.mock import patch
+        from clipgrab.core.downloader import DownloadWorker
+
+        ig = self.win._instagram_page
+        ig._url_input.setText("https://www.instagram.com/reel/C7Xxyz/")
+        with patch.object(DownloadWorker, "execute_fetch"):
+            ig._on_fetch_clicked()
+            self.assertIsNotNone(ig._fetch_worker)
+            self.assertIsNotNone(ig._fetch_thread)
+            self.assertEqual(ig._fetch_worker.fetch_url, "https://www.instagram.com/reel/C7Xxyz/")
+            self.assertEqual(ig._fetch_worker.fetch_platform_id, "instagram")
+            self.assertTrue(ig._watchdog_timer.isActive())
+            ig.shutdown()
+
+        # Test fetch worker initialization on Facebook page
+        fb = self.win._facebook_page
+        fb._url_input.setText("https://www.facebook.com/reel/123456789012345")
+        with patch.object(DownloadWorker, "execute_fetch"):
+            fb._on_fetch_clicked()
+            self.assertIsNotNone(fb._fetch_worker)
+            self.assertIsNotNone(fb._fetch_thread)
+            self.assertEqual(fb._fetch_worker.fetch_url, "https://www.facebook.com/reel/123456789012345")
+            self.assertEqual(fb._fetch_worker.fetch_platform_id, "facebook")
+            self.assertTrue(fb._watchdog_timer.isActive())
+            fb.shutdown()
+
 
 if __name__ == "__main__":
     unittest.main()

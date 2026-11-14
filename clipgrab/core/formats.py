@@ -279,8 +279,22 @@ def parse_video_info(info_dict: dict) -> VideoInfo:
     Returns:
         A VideoInfo object with all parsed metadata and format lists.
     """
+    # If this is a multi-item entry or carousel (common in Instagram), grab first entry for metadata if top-level is sparse
+    entries = info_dict.get("entries")
+    if entries and isinstance(entries, list) and len(entries) > 0 and not info_dict.get("formats"):
+        first = entries[0]
+        if isinstance(first, dict):
+            for k in ("formats", "duration", "thumbnail", "uploader", "upload_date", "description", "title"):
+                if not info_dict.get(k) and first.get(k):
+                    info_dict[k] = first[k]
+
+    title = info_dict.get("title")
+    if not title or title.strip() in ("NA", "None", ""):
+        desc = info_dict.get("description", "")
+        title = desc.split("\n")[0][:80] if desc else "Media"
+
     return VideoInfo(
-        title=info_dict.get("title", "Unknown Title"),
+        title=title,
         url=info_dict.get("webpage_url", info_dict.get("url", "")),
         duration=float(info_dict.get("duration", 0) or 0),
         thumbnail_url=info_dict.get("thumbnail", ""),

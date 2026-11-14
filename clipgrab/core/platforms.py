@@ -109,16 +109,20 @@ PLATFORM_INSTAGRAM = PlatformConfig(
     display_name="Instagram",
     icon="📸",
     url_patterns=_compile([
-        # Reels
-        r"^(?:https?://)?(?:www\.)?instagram\.com/reel/[\w-]+",
-        # Static posts (single image or carousel)
-        r"^(?:https?://)?(?:www\.)?instagram\.com/p/[\w-]+",
-        # IGTV
-        r"^(?:https?://)?(?:www\.)?instagram\.com/tv/[\w-]+",
+        # Reels (/reel/ or /reels/)
+        r"^(?:https?://)?(?:(?:www\.|m\.)?instagram\.com|(?:www\.)?instagr\.am)/reels?/[\w-]+",
+        # Static posts & carousels (/p/)
+        r"^(?:https?://)?(?:(?:www\.|m\.)?instagram\.com|(?:www\.)?instagr\.am)/p/[\w-]+",
+        # IGTV (/tv/)
+        r"^(?:https?://)?(?:(?:www\.|m\.)?instagram\.com|(?:www\.)?instagr\.am)/tv/[\w-]+",
         # Stories
-        r"^(?:https?://)?(?:www\.)?instagram\.com/stories/[\w.]+/\d+",
+        r"^(?:https?://)?(?:(?:www\.|m\.)?instagram\.com|(?:www\.)?instagr\.am)/stories/[\w.]+/\d+",
+        # Share links (/share/... or /share/p/... or /share/r/...)
+        r"^(?:https?://)?(?:(?:www\.|m\.)?instagram\.com|(?:www\.)?instagr\.am)/share/(?:[rvp]/|reel/)?[\w-]+",
         # Profile page (not downloadable but detectable)
-        r"^(?:https?://)?(?:www\.)?instagram\.com/[\w.]+/?$",
+        r"^(?:https?://)?(?:(?:www\.|m\.)?instagram\.com|(?:www\.)?instagr\.am)/[\w.]+/?$",
+        # Broad fallback for any instagram.com or instagr.am URL
+        r"^(?:https?://)?(?:[a-zA-Z0-9-]+\.)?(?:instagram\.com|instagr\.am)/.*",
     ]),
     content_kinds={ContentKind.REEL, ContentKind.POST, ContentKind.STORY, ContentKind.VIDEO, ContentKind.IMAGE},
     engine=DownloadEngine.YTDLP,
@@ -134,26 +138,26 @@ PLATFORM_FACEBOOK = PlatformConfig(
     display_name="Facebook",
     icon="👥",
     url_patterns=_compile([
-        # facebook.com/watch
-        r"^(?:https?://)?(?:www\.)?facebook\.com/watch(?:/\?v=\d+|/\?.*)?",
-        # facebook.com/reel
-        r"^(?:https?://)?(?:www\.)?facebook\.com/reel/\d+",
-        # facebook.com/<page>/videos/<id>
-        r"^(?:https?://)?(?:www\.)?facebook\.com/[\w.]+/videos/\d+",
-        # facebook.com/video.php
-        r"^(?:https?://)?(?:www\.)?facebook\.com/video\.php\?",
-        # m.facebook.com (mobile)
-        r"^(?:https?://)?m\.facebook\.com/[\w.]+/videos/\d+",
         # fb.watch short links
         r"^(?:https?://)?fb\.watch/[\w-]+",
-        # facebook.com/share/[rvp]/<hash> (newer share links for reels, videos, posts)
-        r"^(?:https?://)?(?:www\.)?facebook\.com/share/[rvp]/[\w-]+",
-        # permalink.php (redirect targets for shares)
-        r"^(?:https?://)?(?:www\.)?facebook\.com/permalink\.php\?.*",
-        # facebook.com/<page>/posts/<id>
-        r"^(?:https?://)?(?:www\.)?facebook\.com/[\w.]+/posts/[\w-]+",
-        # Reels in /stories/
-        r"^(?:https?://)?(?:www\.)?facebook\.com/stories/\d+/\w+",
+        # Watch URLs: facebook.com/watch...
+        r"^(?:https?://)?(?:(?:www\.|m\.|web\.|touch\.)?facebook\.com|(?:www\.)?fb\.com)/watch(?:/\?v=\d+|/\?.*|\?.*)?",
+        # Reels: facebook.com/reel/ or /reels/
+        r"^(?:https?://)?(?:(?:www\.|m\.|web\.|touch\.)?facebook\.com|(?:www\.)?fb\.com)/reels?/[\w-]+",
+        # Share links: facebook.com/share/...
+        r"^(?:https?://)?(?:(?:www\.|m\.|web\.|touch\.)?facebook\.com|(?:www\.)?fb\.com)/share/(?:[rvp]/)?[\w-]+",
+        # Videos: facebook.com/<page>/videos/<id>
+        r"^(?:https?://)?(?:(?:www\.|m\.|web\.|touch\.)?facebook\.com|(?:www\.)?fb\.com)/[\w.]+/videos/[\w-]+",
+        # Posts: facebook.com/<page>/posts/<id>
+        r"^(?:https?://)?(?:(?:www\.|m\.|web\.|touch\.)?facebook\.com|(?:www\.)?fb\.com)/[\w.]+/posts/[\w-]+",
+        # video.php
+        r"^(?:https?://)?(?:(?:www\.|m\.|web\.|touch\.)?facebook\.com|(?:www\.)?fb\.com)/video\.php\?.*",
+        # permalink.php
+        r"^(?:https?://)?(?:(?:www\.|m\.|web\.|touch\.)?facebook\.com|(?:www\.)?fb\.com)/permalink\.php\?.*",
+        # Stories
+        r"^(?:https?://)?(?:(?:www\.|m\.|web\.|touch\.)?facebook\.com|(?:www\.)?fb\.com)/stories/.*",
+        # Broad fallback for any facebook.com or fb.com URL
+        r"^(?:https?://)?(?:[a-zA-Z0-9-]+\.)?(?:facebook\.com|fb\.com)/.*",
     ]),
     content_kinds={ContentKind.VIDEO, ContentKind.REEL, ContentKind.POST},
     engine=DownloadEngine.YTDLP,
@@ -307,19 +311,19 @@ def guess_content_kind(url: str, platform: Optional[PlatformConfig] = None) -> C
         return ContentKind.VIDEO
 
     if platform.id == "instagram":
-        if "/reel/" in url_lower:
+        if "/reel" in url_lower or "/share/r" in url_lower or "/share/reel" in url_lower:
             return ContentKind.REEL
         if "/stories/" in url_lower:
             return ContentKind.STORY
-        if "/p/" in url_lower:
+        if "/p/" in url_lower or "/share/p" in url_lower:
             return ContentKind.POST  # May be image or video — needs fetch to confirm
         if "/tv/" in url_lower:
             return ContentKind.VIDEO
 
     if platform.id == "facebook":
-        if "/reel/" in url_lower or "/share/r/" in url_lower:
+        if "/reel" in url_lower or "/share/r" in url_lower:
             return ContentKind.REEL
-        if "/share/p/" in url_lower or "/posts/" in url_lower or "permalink.php" in url_lower:
+        if "/share/p" in url_lower or "/posts" in url_lower or "permalink.php" in url_lower:
             return ContentKind.POST
         return ContentKind.VIDEO
 

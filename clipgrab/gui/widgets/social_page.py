@@ -42,7 +42,7 @@ from clipgrab.config.settings import AppSettings
 from clipgrab.core.downloader import DownloadRequest, DownloadWorker
 from clipgrab.core.formats import AudioFormat, AudioOutputFormat, VideoFormat, VideoInfo, parse_video_info
 from clipgrab.core.logger import get_logger
-from clipgrab.core.platforms import detect_platform
+from clipgrab.core.platforms import DownloadEngine, detect_platform
 from clipgrab.core.validator import sanitize_filename, suggest_filename
 from clipgrab.gui.icons import get_svg_icon, get_svg_pixmap
 from clipgrab.gui.theme import (
@@ -845,19 +845,20 @@ class SocialDownloadPage(QWidget):
             return
 
         plat = detect_platform(clean)
-        plat_id = plat.id.lower() if plat else "unknown"
+        plat_id = plat.id.lower() if plat else "unsupported"
         if plat_id == self._platform_id:
             self._platform_chip.show()
             self._valid_check.show()
             self._wrong_platform_banner.hide()
             # Auto-select type pill based on URL pattern
-            if "/reel/" in clean or "/reels/" in clean:
+            clean_lower = clean.lower()
+            if "/reel" in clean_lower or "/share/r" in clean_lower or "/share/reel" in clean_lower:
                 self._set_content_type("Reel")
-            elif "/watch" in clean or "fb.watch" in clean:
-                self._set_content_type("Video")
-            elif "/p/" in clean or "/post/" in clean:
+            elif "/watch" in clean_lower or "fb.watch" in clean_lower or "/video" in clean_lower or "/share/v" in clean_lower:
+                self._set_content_type("Video" if "Video" in self._type_buttons else "Reel")
+            elif "/p/" in clean_lower or "/post" in clean_lower or "/share/p" in clean_lower:
                 self._set_content_type("Post")
-        elif plat_id != "unknown":
+        elif plat.engine != DownloadEngine.UNSUPPORTED and plat_id != "unsupported":
             self._platform_chip.hide()
             self._valid_check.hide()
             self._wp_target_id = plat_id
@@ -922,16 +923,24 @@ class SocialDownloadPage(QWidget):
         self._fetch_btn.setText("Fetch info")
         self._fetch_btn.setEnabled(True)
 
-        dur_str = _format_time(video_info.duration)
+        if video_info.duration and video_info.duration > 0:
+            dur_str = _format_time(video_info.duration)
+        else:
+            dur_str = "Media"
         self._status_badge.setText(f"● {self._type_singular} found")
         self._status_badge.setStyleSheet(f"color: {COLOR_SUCCESS};")
         self._dur_pill.setText(dur_str)
-        best_res = video_info.video_formats[0].resolution if video_info.video_formats else "1080p"
+        best_res = video_info.video_formats[0].resolution if video_info.video_formats else "Best"
         self._res_pill.setText(best_res)
 
-        self._full_video_title = video_info.title
-        self._video_title.setText(video_info.title)
-        self._video_title.setToolTip(video_info.title)
+        title = video_info.title
+        if not title or title.strip() in ("NA", "None", ""):
+            desc = getattr(video_info, "description", "")
+            title = desc.split("\n")[0][:80] if desc else f"{self._platform_name} Media"
+
+        self._full_video_title = title
+        self._video_title.setText(title)
+        self._video_title.setToolTip(title)
 
         meta_parts = []
         if getattr(video_info, "uploader", None):
@@ -940,7 +949,7 @@ class SocialDownloadPage(QWidget):
             meta_parts.append(video_info.upload_date)
         self._video_meta.setText(" · ".join(meta_parts) if meta_parts else f"{self._platform_name} media")
 
-        self._filename_input.setText(suggest_filename(video_info.title))
+        self._filename_input.setText(suggest_filename(title))
         self._rebuild_quality_combo_for_video()
         self._update_summary_label()
         self.info_fetched.emit(video_info)
@@ -968,8 +977,8 @@ class SocialDownloadPage(QWidget):
             return
 
         plat = detect_platform(url)
-        plat_id = plat.id.lower() if plat else "unknown"
-        if plat_id != self._platform_id and plat_id != "unknown":
+        plat_id = plat.id.lower() if plat else "unsupported"
+        if plat.engine != DownloadEngine.UNSUPPORTED and plat_id != self._platform_id:
             self._on_url_text_changed(url)
             return
 
@@ -977,49 +986,54 @@ class SocialDownloadPage(QWidget):
         self.set_fetching_state()
         self.status_message.emit(f"Fetching {self._platform_name} info...")
 
-        cookies_file = getattr(self._settings, "cookies_file_path", None)
-        browser_cookies = getattr(self._settings, "browser_for_cookies", None)
-
-        self._fetch_worker = DownloadWorker(
-            DownloadRequest(
-                url=url,
-                platform_id=self._platform_id,
-                cookies_file_path=cookies_file,
-                browser_for_cookies=browser_cookies,
-            ),
-            fetch_only=True,
-        )
         self._fetch_thread = QThread(self)
+        self._fetch_worker = DownloadWorker()
         self._fetch_worker.moveToThread(self._fetch_thread)
 
+        self._fetch_worker.fetch_url = url
+        self._fetch_worker.fetch_platform_id = self._platform_id
+
         self._fetch_worker.info_fetched.connect(self._on_worker_info_fetched)
-        self._fetch_worker.error.connect(self._on_worker_error)
-        self._fetch_worker.finished.connect(self._fetch_thread.quit)
-        self._fetch_worker.finished.connect(self._fetch_worker.deleteLater)
+        self._fetch_worker.info_fetch_failed.connect(self._on_worker_fetch_failed)
+
+        self._fetch_thread.started.connect(self._fetch_worker.execute_fetch, Qt.ConnectionType.DirectConnection)
+        self._fetch_thread.finished.connect(self._on_fetch_thread_finished)
         self._fetch_thread.finished.connect(self._fetch_thread.deleteLater)
+        self._fetch_thread.finished.connect(self._fetch_worker.deleteLater)
 
         self._watchdog_timer.start()
         self._fetch_thread.start()
-        QTimer.singleShot(0, self._fetch_worker.run)
+        logger.info("[%s] Fetch worker thread started for url: %s", self._platform_name.upper(), url)
 
     def _on_fetch_timeout(self) -> None:
+        logger.error("[%s] Fetch timed out after 60 seconds", self._platform_name.upper())
         self._shutdown_fetch_worker()
-        self.set_error_state("Fetch request timed out after 60 seconds.")
+        self.set_error_state("Fetch request timed out after 60 seconds. Please check your network connection and retry.")
         self.status_message.emit("Fetch timed out.")
 
     @Slot(object)
     def _on_worker_info_fetched(self, video_info: VideoInfo) -> None:
         if self._watchdog_timer.isActive():
             self._watchdog_timer.stop()
+        if self._fetch_thread and self._fetch_thread.isRunning():
+            self._fetch_thread.quit()
+        logger.info("[%s] Info fetched successfully: '%s'", self._platform_name.upper(), video_info.title)
         self.set_loaded_state(video_info)
         self.status_message.emit(f"Ready: {video_info.title[:40]}")
 
-    @Slot(str)
-    def _on_worker_error(self, error_msg: str) -> None:
+    @Slot(str, bool)
+    def _on_worker_fetch_failed(self, error_msg: str, is_extraction: bool = False) -> None:
         if self._watchdog_timer.isActive():
             self._watchdog_timer.stop()
+        if self._fetch_thread and self._fetch_thread.isRunning():
+            self._fetch_thread.quit()
+        logger.error("[%s] Fetch failed: %s", self._platform_name.upper(), error_msg)
         self.set_error_state(error_msg)
         self.status_message.emit("Fetch failed.")
+
+    def _on_fetch_thread_finished(self) -> None:
+        self._fetch_thread = None
+        self._fetch_worker = None
 
     def _shutdown_fetch_worker(self) -> None:
         if self._watchdog_timer.isActive():
@@ -1027,11 +1041,11 @@ class SocialDownloadPage(QWidget):
         if self._fetch_worker:
             try:
                 self._fetch_worker.request_cancel()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("[%s] Error cancelling fetch worker: %s", self._platform_name.upper(), e)
         if self._fetch_thread and self._fetch_thread.isRunning():
             self._fetch_thread.quit()
-            if not self._fetch_thread.wait(1000):
+            if not self._fetch_thread.wait(1500):
                 self._fetch_thread.terminate()
                 self._fetch_thread.wait(500)
         self._fetch_thread = None

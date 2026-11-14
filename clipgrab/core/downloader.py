@@ -43,6 +43,9 @@ class DownloadRequest:
         frame_accurate_clipping: bool = False,
         concurrent_fragments: int = 16,
         convert_to_gif: bool = False,
+        platform_id: str = "youtube",
+        cookies_file_path: Optional[str] = None,
+        browser_for_cookies: Optional[str] = None,
     ):
         self.url = url
         self.output_dir = output_dir
@@ -58,6 +61,9 @@ class DownloadRequest:
         self.frame_accurate_clipping = frame_accurate_clipping
         self.concurrent_fragments = concurrent_fragments
         self.convert_to_gif = convert_to_gif
+        self.platform_id = platform_id
+        self.cookies_file_path = cookies_file_path
+        self.browser_for_cookies = browser_for_cookies
 
 
 def kill_process_tree(pid: int) -> None:
@@ -597,18 +603,20 @@ class DownloadWorker(QObject):
             "--newline",
             "--progress",
             "--progress-template", "%(progress)j",
-            "--no-playlist",
             "--no-mtime",
             "--continue",
             "--concurrent-fragments", str(getattr(request, "concurrent_fragments", 16)),
         ]
 
+        if getattr(request, "platform_id", "youtube") in ("youtube",):
+            cmd.append("--no-playlist")
+
         # Age-restricted & cookie authentication support
         try:
             from clipgrab.config.settings import AppSettings
             _s = AppSettings.load()
-            _b = getattr(_s, "browser_for_cookies", "").strip().lower()
-            _cf = getattr(_s, "cookies_file_path", "").strip()
+            _b = (getattr(request, "browser_for_cookies", None) or getattr(_s, "browser_for_cookies", "")).strip().lower()
+            _cf = (getattr(request, "cookies_file_path", None) or getattr(_s, "cookies_file_path", "")).strip()
             if _cf and os.path.isfile(_cf):
                 cmd.extend(["--cookies", _cf])
             elif _b and _b not in ("none", ""):
@@ -726,12 +734,18 @@ class DownloadWorker(QObject):
 
 def _classify_error(stderr: str, is_extraction: bool) -> str:
     stderr_lower = stderr.lower()
+    if "login" in stderr_lower or "checkpoint" in stderr_lower or "log in" in stderr_lower:
+        return (
+            "Login required or content is private. "
+            "To access this media, select your browser in Settings > Cookies & Authentication, "
+            "or provide an authorized cookies.txt file."
+        )
     if "private video" in stderr_lower:
         return "This video is private. You need the owner's permission to access it."
     if "sign in" in stderr_lower or "age" in stderr_lower:
         return (
-            "This video is age-restricted by YouTube. "
-            "To download it, select your browser in Settings > YouTube Cookies, "
+            "This video is age-restricted or requires sign in. "
+            "To download it, select your browser in Settings > Cookies & Authentication, "
             "or provide an authorized cookies.txt file."
         )
     if "unavailable" in stderr_lower or "removed" in stderr_lower:
