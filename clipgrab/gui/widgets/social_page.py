@@ -103,6 +103,8 @@ class SocialChipButton(QPushButton):
         return self._is_active
 
     def _update_style(self) -> None:
+        app = QApplication.instance()
+        is_dark = (app.property("current_theme") != "light") if app else True
         if self._is_active:
             self.setStyleSheet(
                 "QPushButton {"
@@ -114,17 +116,21 @@ class SocialChipButton(QPushButton):
                 "}"
             )
         else:
+            bg = BG_CARD_ALT if is_dark else "#EEF1F6"
+            fg = TEXT_SECONDARY if is_dark else "#111318"
+            border = BORDER_CARD_SUBTLE if is_dark else "#D8DCE5"
+            hover_bg = "#262A37" if is_dark else "#E2E6EE"
             self.setStyleSheet(
                 "QPushButton {"
-                f"  background-color: {BG_CARD_ALT};"
-                f"  color: {TEXT_SECONDARY};"
-                f"  border: 1px solid {BORDER_CARD_SUBTLE};"
+                f"  background-color: {bg};"
+                f"  color: {fg};"
+                f"  border: 1px solid {border};"
                 "  border-radius: 8px;"
                 "}"
-                "QPushButton:hover {"
-                "  background-color: #262A37;"
-                f"  color: {TEXT_PRIMARY};"
-                "}"
+                f"QPushButton:hover {{"
+                f"  background-color: {hover_bg};"
+                f"  color: {fg};"
+                f"}}"
             )
 
 
@@ -173,11 +179,19 @@ class SocialSegmentedToggle(QFrame):
         return self._mode
 
     def _update_appearance(self) -> None:
+        app = QApplication.instance()
+        is_dark = (app.property("current_theme") != "light") if app else True
+        container_bg = BG_INPUT if is_dark else "#EEF1F6"
+        container_border = BORDER_INPUT if is_dark else "#D8DCE5"
+        self.setStyleSheet(
+            f"QFrame#socialSegmentedToggle {{ background-color: {container_bg}; border-radius: 12px; border: 1px solid {container_border}; }}"
+        )
         active_style = (
             f"background-color: {COLOR_ACCENT}; color: #FFFFFF; border: none; border-radius: 10px;"
         )
+        inactive_fg = TEXT_SECONDARY if is_dark else "#5A6170"
         inactive_style = (
-            f"background-color: transparent; color: {TEXT_SECONDARY}; border: none; border-radius: 10px;"
+            f"background-color: transparent; color: {inactive_fg}; border: none; border-radius: 10px;"
         )
         if self._mode == "video":
             self._btn_video.setStyleSheet(active_style)
@@ -299,15 +313,15 @@ class SocialDownloadPage(QWidget):
         # Title & Subtitle Column
         title_col = QVBoxLayout()
         title_col.setSpacing(2)
-        title_lbl = QLabel(self._platform_name)
-        title_lbl.setFont(get_font(pixel_size=20, weight=QFont.Weight.Bold))
-        title_lbl.setStyleSheet(f"color: {TEXT_PRIMARY};")
-        title_col.addWidget(title_lbl)
+        self._title_lbl = QLabel(self._platform_name)
+        self._title_lbl.setFont(get_font(pixel_size=20, weight=QFont.Weight.Bold))
+        self._title_lbl.setStyleSheet(f"color: {TEXT_PRIMARY};")
+        title_col.addWidget(self._title_lbl)
 
-        sub_lbl = QLabel(self._subtitle_text)
-        sub_lbl.setFont(get_font(pixel_size=12))
-        sub_lbl.setStyleSheet(f"color: {TEXT_SECONDARY};")
-        title_col.addWidget(sub_lbl)
+        self._sub_lbl = QLabel(self._subtitle_text)
+        self._sub_lbl.setFont(get_font(pixel_size=12))
+        self._sub_lbl.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        title_col.addWidget(self._sub_lbl)
         header_row.addLayout(title_col, stretch=1)
 
         # Content Type Selector Pills
@@ -332,13 +346,13 @@ class SocialDownloadPage(QWidget):
         url_bar_row = QHBoxLayout()
         url_bar_row.setSpacing(10)
 
-        url_input_box = QFrame()
-        url_input_box.setObjectName("urlInputBox")
-        url_input_box.setFixedHeight(44)
-        url_input_box.setStyleSheet(
+        self._url_input_box = QFrame()
+        self._url_input_box.setObjectName("urlInputBox")
+        self._url_input_box.setFixedHeight(44)
+        self._url_input_box.setStyleSheet(
             f"QFrame#urlInputBox {{ background-color: {BG_INPUT}; border: 1px solid {BORDER_INPUT}; border-radius: 12px; }}"
         )
-        url_box_layout = QHBoxLayout(url_input_box)
+        url_box_layout = QHBoxLayout(self._url_input_box)
         url_box_layout.setContentsMargins(12, 0, 12, 0)
         url_box_layout.setSpacing(8)
 
@@ -370,7 +384,7 @@ class SocialDownloadPage(QWidget):
         self._valid_check.hide()
         url_box_layout.addWidget(self._valid_check)
 
-        url_bar_row.addWidget(url_input_box, stretch=1)
+        url_bar_row.addWidget(self._url_input_box, stretch=1)
 
         self._paste_btn = QPushButton("Paste")
         self._paste_btn.setFixedHeight(44)
@@ -448,35 +462,37 @@ class SocialDownloadPage(QWidget):
         empty_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # Download circular badge
-        badge_circle = QFrame()
-        badge_circle.setFixedSize(56, 56)
-        badge_circle.setStyleSheet(f"background-color: {BG_CARD_ALT}; border: 1px solid {BORDER_CARD_SUBTLE}; border-radius: 28px;")
-        bc_layout = QVBoxLayout(badge_circle)
+        self._badge_circle = QFrame()
+        self._badge_circle.setObjectName("badgeCircle")
+        self._badge_circle.setFixedSize(56, 56)
+        self._badge_circle.setStyleSheet(f"QFrame#badgeCircle {{ background-color: {BG_CARD_ALT}; border: 1px solid {BORDER_CARD_SUBTLE}; border-radius: 28px; }}")
+        bc_layout = QVBoxLayout(self._badge_circle)
         bc_layout.setContentsMargins(0, 0, 0, 0)
         bc_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         bc_icon = QLabel()
         bc_icon.setPixmap(get_svg_pixmap("download", color=COLOR_ACCENT, size=24))
         bc_layout.addWidget(bc_icon)
-        empty_layout.addWidget(badge_circle, alignment=Qt.AlignmentFlag.AlignCenter)
+        empty_layout.addWidget(self._badge_circle, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        empty_heading = QLabel(f"Paste a {self._platform_name} link to get started")
-        empty_heading.setFont(get_font(pixel_size=18, weight=QFont.Weight.Bold))
-        empty_heading.setStyleSheet(f"color: {TEXT_PRIMARY};")
-        empty_heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        empty_layout.addWidget(empty_heading)
+        self._empty_heading = QLabel(f"Paste a {self._platform_name} link to get started")
+        self._empty_heading.setFont(get_font(pixel_size=18, weight=QFont.Weight.Bold))
+        self._empty_heading.setStyleSheet(f"color: {TEXT_PRIMARY};")
+        self._empty_heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_layout.addWidget(self._empty_heading)
 
-        empty_desc = QLabel(
+        self._empty_desc = QLabel(
             f"Copy the link of a {self._platform_name.lower()} reel or video from your browser or app, paste it above, and press Fetch info."
         )
-        empty_desc.setFont(get_font(pixel_size=13))
-        empty_desc.setStyleSheet(f"color: {TEXT_SECONDARY};")
-        empty_desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        empty_desc.setWordWrap(True)
-        empty_layout.addWidget(empty_desc)
+        self._empty_desc.setFont(get_font(pixel_size=13))
+        self._empty_desc.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        self._empty_desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_desc.setWordWrap(True)
+        empty_layout.addWidget(self._empty_desc)
 
         # Supported domain pills
         domains_container = QWidget()
         domains_flow = FlowLayout(domains_container, margin=0, h_spacing=8, v_spacing=6)
+        self._domain_pills: list[QLabel] = []
         for dom in self._domain_chips:
             dpill = QLabel(dom)
             dpill.setFont(get_font(pixel_size=11, weight=QFont.Weight.Medium))
@@ -484,12 +500,14 @@ class SocialDownloadPage(QWidget):
                 f"background-color: {BG_PILL}; color: {TEXT_MUTED}; border: 1px solid {BORDER_PILL}; border-radius: 6px; padding: 4px 10px;"
             )
             domains_flow.addWidget(dpill)
+            self._domain_pills.append(dpill)
         empty_layout.addWidget(domains_container, alignment=Qt.AlignmentFlag.AlignCenter)
 
         # 3-Step Guide Container
-        steps_box = QFrame()
-        steps_box.setStyleSheet(f"background-color: {BG_CARD_ALT}; border: 1px solid {BORDER_CARD_SUBTLE}; border-radius: 12px;")
-        steps_layout = QHBoxLayout(steps_box)
+        self._steps_box = QFrame()
+        self._steps_box.setObjectName("stepsBox")
+        self._steps_box.setStyleSheet(f"QFrame#stepsBox {{ background-color: {BG_CARD_ALT}; border: 1px solid {BORDER_CARD_SUBTLE}; border-radius: 12px; }}")
+        steps_layout = QHBoxLayout(self._steps_box)
         steps_layout.setContentsMargins(18, 16, 18, 16)
         steps_layout.setSpacing(16)
 
@@ -498,6 +516,9 @@ class SocialDownloadPage(QWidget):
             ("2", "Fetch its details", "We analyze the video, quality options, and available audio tracks"),
             ("3", "Download video or audio", "Choose your format and save directly to your computer"),
         ]
+        self._step_badges: list[QLabel] = []
+        self._step_titles: list[QLabel] = []
+        self._step_descs: list[QLabel] = []
         for num, title, detail in steps_data:
             step_item = QHBoxLayout()
             step_item.setSpacing(10)
@@ -510,6 +531,7 @@ class SocialDownloadPage(QWidget):
                 f"background-color: {BG_PILL}; color: {COLOR_ACCENT}; border: 1px solid {BORDER_PILL}; border-radius: 13px;"
             )
             step_item.addWidget(num_badge, alignment=Qt.AlignmentFlag.AlignTop)
+            self._step_badges.append(num_badge)
 
             st_col = QVBoxLayout()
             st_col.setSpacing(2)
@@ -517,17 +539,19 @@ class SocialDownloadPage(QWidget):
             st_title.setFont(get_font(pixel_size=13, weight=QFont.Weight.DemiBold))
             st_title.setStyleSheet(f"color: {TEXT_PRIMARY};")
             st_col.addWidget(st_title)
+            self._step_titles.append(st_title)
 
             st_desc = QLabel(detail)
             st_desc.setFont(get_font(pixel_size=11))
             st_desc.setStyleSheet(f"color: {TEXT_MUTED};")
             st_desc.setWordWrap(True)
             st_col.addWidget(st_desc)
+            self._step_descs.append(st_desc)
 
             step_item.addLayout(st_col, stretch=1)
             steps_layout.addLayout(step_item, stretch=1)
 
-        empty_layout.addWidget(steps_box)
+        empty_layout.addWidget(self._steps_box)
         page_layout.addWidget(self._empty_card)
 
         # ── 5. Fetched State: Info Card ───────────────────────────────────────
@@ -622,10 +646,10 @@ class SocialDownloadPage(QWidget):
         opt_layout.setContentsMargins(18, 16, 18, 16)
         opt_layout.setSpacing(12)
 
-        opt_title = QLabel("Quality and format")
-        opt_title.setFont(get_font(pixel_size=16, weight=QFont.Weight.DemiBold))
-        opt_title.setStyleSheet(f"color: {TEXT_PRIMARY};")
-        opt_layout.addWidget(opt_title)
+        self._opt_title = QLabel("Quality and format")
+        self._opt_title.setFont(get_font(pixel_size=16, weight=QFont.Weight.DemiBold))
+        self._opt_title.setStyleSheet(f"color: {TEXT_PRIMARY};")
+        opt_layout.addWidget(self._opt_title)
 
         self._mode_toggle = SocialSegmentedToggle()
         self._mode_toggle.toggled.connect(self._on_mode_toggled)
@@ -643,10 +667,10 @@ class SocialDownloadPage(QWidget):
         self._quality_combo.currentIndexChanged.connect(self._on_quality_changed)
         opt_layout.addWidget(self._quality_combo)
 
-        fmt_lbl = QLabel("Output format")
-        fmt_lbl.setFont(get_font(pixel_size=12, weight=QFont.Weight.Medium))
-        fmt_lbl.setStyleSheet(f"color: {TEXT_SECONDARY};")
-        opt_layout.addWidget(fmt_lbl)
+        self._fmt_lbl = QLabel("Output format")
+        self._fmt_lbl.setFont(get_font(pixel_size=12, weight=QFont.Weight.Medium))
+        self._fmt_lbl.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        opt_layout.addWidget(self._fmt_lbl)
 
         self._chips_row = QHBoxLayout()
         self._chips_row.setSpacing(8)
@@ -655,20 +679,20 @@ class SocialDownloadPage(QWidget):
         opt_layout.addLayout(self._chips_row)
 
         # Save section inside Options
-        save_lbl = QLabel("Save")
-        save_lbl.setFont(get_font(pixel_size=14, weight=QFont.Weight.DemiBold))
-        save_lbl.setStyleSheet(f"color: {TEXT_PRIMARY}; margin-top: 6px;")
-        opt_layout.addWidget(save_lbl)
+        self._save_lbl = QLabel("Save")
+        self._save_lbl.setFont(get_font(pixel_size=14, weight=QFont.Weight.DemiBold))
+        self._save_lbl.setStyleSheet(f"color: {TEXT_PRIMARY}; margin-top: 6px;")
+        opt_layout.addWidget(self._save_lbl)
 
-        fn_lbl = QLabel("File name")
-        fn_lbl.setFont(get_font(pixel_size=12, weight=QFont.Weight.Medium))
-        fn_lbl.setStyleSheet(f"color: {TEXT_SECONDARY};")
-        opt_layout.addWidget(fn_lbl)
+        self._fn_lbl = QLabel("File name")
+        self._fn_lbl.setFont(get_font(pixel_size=12, weight=QFont.Weight.Medium))
+        self._fn_lbl.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        opt_layout.addWidget(self._fn_lbl)
 
-        fn_box = QFrame()
-        fn_box.setFixedHeight(36)
-        fn_box.setStyleSheet(f"background-color: {BG_INPUT}; border: 1px solid {BORDER_INPUT}; border-radius: 10px;")
-        fn_box_layout = QHBoxLayout(fn_box)
+        self._fn_box = QFrame()
+        self._fn_box.setFixedHeight(36)
+        self._fn_box.setStyleSheet(f"QFrame {{ background-color: {BG_INPUT}; border: 1px solid {BORDER_INPUT}; border-radius: 10px; }}")
+        fn_box_layout = QHBoxLayout(self._fn_box)
         fn_box_layout.setContentsMargins(10, 0, 10, 0)
         fn_box_layout.setSpacing(4)
 
@@ -682,12 +706,12 @@ class SocialDownloadPage(QWidget):
         self._ext_lbl.setFont(get_font(pixel_size=12, weight=QFont.Weight.Medium))
         self._ext_lbl.setStyleSheet(f"color: {TEXT_MUTED};")
         fn_box_layout.addWidget(self._ext_lbl)
-        opt_layout.addWidget(fn_box)
+        opt_layout.addWidget(self._fn_box)
 
-        fd_lbl = QLabel("Folder")
-        fd_lbl.setFont(get_font(pixel_size=12, weight=QFont.Weight.Medium))
-        fd_lbl.setStyleSheet(f"color: {TEXT_SECONDARY};")
-        opt_layout.addWidget(fd_lbl)
+        self._fd_lbl = QLabel("Folder")
+        self._fd_lbl.setFont(get_font(pixel_size=12, weight=QFont.Weight.Medium))
+        self._fd_lbl.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        opt_layout.addWidget(self._fd_lbl)
 
         folder_row = QHBoxLayout()
         folder_row.setSpacing(6)
@@ -1120,3 +1144,119 @@ class SocialDownloadPage(QWidget):
         """Prefill URL into input and trigger fetch."""
         self._url_input.setText(url)
         self._on_fetch_clicked()
+
+    def update_theme(self, theme_name: str) -> None:
+        """Update social page elements for dark/light theme."""
+        is_dark = (theme_name == "dark")
+        card_bg = BG_CARD if is_dark else "#FFFFFF"
+        card_border = BORDER_CARD if is_dark else "#DCE0E8"
+        card_alt_bg = BG_CARD_ALT if is_dark else "#F5F7FA"
+        card_alt_border = BORDER_CARD_SUBTLE if is_dark else "#E2E5EC"
+        input_bg = BG_INPUT if is_dark else "#FFFFFF"
+        input_border = BORDER_INPUT if is_dark else "#CCD1DC"
+        text_primary = TEXT_PRIMARY if is_dark else "#111318"
+        text_secondary = TEXT_SECONDARY if is_dark else "#5A6170"
+        text_muted = TEXT_MUTED if is_dark else "#8A92A2"
+        pill_bg = BG_PILL if is_dark else "#EEF1F6"
+        pill_border = BORDER_PILL if is_dark else "#CCD1DC"
+        input_fg = "#FFFFFF" if is_dark else "#111318"
+
+        if hasattr(self, "_title_lbl"):
+            self._title_lbl.setStyleSheet(f"color: {text_primary};")
+        if hasattr(self, "_sub_lbl"):
+            self._sub_lbl.setStyleSheet(f"color: {text_secondary};")
+        if hasattr(self, "_url_input_box"):
+            self._url_input_box.setStyleSheet(
+                f"QFrame#urlInputBox {{ background-color: {input_bg}; border: 1px solid {input_border}; border-radius: 12px; }}"
+            )
+        if hasattr(self, "_url_input"):
+            self._url_input.setStyleSheet(f"QLineEdit {{ background: transparent; border: none; color: {input_fg}; padding: 0; }}")
+        if hasattr(self, "_paste_btn"):
+            paste_hover = "#1C1F2B" if is_dark else "#F5F7FA"
+            self._paste_btn.setStyleSheet(
+                f"QPushButton {{ background-color: {card_bg}; color: {text_primary}; border: 1px solid {card_border}; border-radius: 10px; padding: 0 16px; }}"
+                f"QPushButton:hover {{ background-color: {paste_hover}; }}"
+            )
+        if hasattr(self, "_empty_card"):
+            self._empty_card.setStyleSheet(
+                f"QFrame#emptyCard {{ background-color: {card_bg}; border: 1px solid {card_border}; border-radius: 16px; }}"
+            )
+        if hasattr(self, "_badge_circle"):
+            self._badge_circle.setStyleSheet(
+                f"QFrame#badgeCircle {{ background-color: {card_alt_bg}; border: 1px solid {card_alt_border}; border-radius: 28px; }}"
+            )
+        if hasattr(self, "_empty_heading"):
+            self._empty_heading.setStyleSheet(f"color: {text_primary};")
+        if hasattr(self, "_empty_desc"):
+            self._empty_desc.setStyleSheet(f"color: {text_secondary};")
+        if hasattr(self, "_steps_box"):
+            self._steps_box.setStyleSheet(
+                f"QFrame#stepsBox {{ background-color: {card_alt_bg}; border: 1px solid {card_alt_border}; border-radius: 12px; }}"
+            )
+        if hasattr(self, "_info_card"):
+            self._info_card.setStyleSheet(
+                f"QFrame#socialInfoCard {{ background-color: {card_bg}; border: 1px solid {card_border}; border-radius: 16px; }}"
+            )
+        if hasattr(self, "_video_title"):
+            self._video_title.setStyleSheet(f"color: {text_primary};")
+        if hasattr(self, "_video_meta"):
+            self._video_meta.setStyleSheet(f"color: {text_secondary};")
+        if hasattr(self, "_dur_pill"):
+            self._dur_pill.setStyleSheet(
+                f"background-color: {pill_bg}; color: {text_secondary}; border-radius: 6px; padding: 3px 8px; border: 1px solid {pill_border};"
+            )
+        if hasattr(self, "_res_pill"):
+            self._res_pill.setStyleSheet(
+                f"background-color: {pill_bg}; color: {text_secondary}; border-radius: 6px; padding: 3px 8px; border: 1px solid {pill_border};"
+            )
+        if hasattr(self, "_options_card"):
+            self._options_card.setStyleSheet(
+                f"QFrame#socialOptionsCard {{ background-color: {card_bg}; border: 1px solid {card_border}; border-radius: 16px; }}"
+            )
+        if hasattr(self, "_opt_title"):
+            self._opt_title.setStyleSheet(f"color: {text_primary};")
+        if hasattr(self, "_quality_lbl"):
+            self._quality_lbl.setStyleSheet(f"color: {text_secondary};")
+        if hasattr(self, "_fmt_lbl"):
+            self._fmt_lbl.setStyleSheet(f"color: {text_secondary};")
+        if hasattr(self, "_save_lbl"):
+            self._save_lbl.setStyleSheet(f"color: {text_primary}; margin-top: 6px;")
+        if hasattr(self, "_fn_lbl"):
+            self._fn_lbl.setStyleSheet(f"color: {text_secondary};")
+        if hasattr(self, "_fd_lbl"):
+            self._fd_lbl.setStyleSheet(f"color: {text_secondary};")
+        if hasattr(self, "_fn_box"):
+            self._fn_box.setStyleSheet(f"QFrame {{ background-color: {input_bg}; border: 1px solid {input_border}; border-radius: 10px; }}")
+        if hasattr(self, "_filename_input"):
+            self._filename_input.setStyleSheet(f"background: transparent; border: none; color: {input_fg};")
+        if hasattr(self, "_ext_lbl"):
+            self._ext_lbl.setStyleSheet(f"color: {text_muted};")
+        if hasattr(self, "_folder_input"):
+            self._folder_input.setStyleSheet(
+                f"QLineEdit {{ background-color: {input_bg}; color: {text_secondary}; border: 1px solid {input_border}; border-radius: 10px; padding: 0 10px; }}"
+            )
+        if hasattr(self, "_browse_btn"):
+            browse_hover = "#262A37" if is_dark else "#E2E6EE"
+            self._browse_btn.setStyleSheet(
+                f"QPushButton {{ background-color: {pill_bg}; color: {text_primary}; border: 1px solid {pill_border}; border-radius: 10px; padding: 0 14px; }}"
+                f"QPushButton:hover {{ background-color: {browse_hover}; }}"
+            )
+        if hasattr(self, "_summary_lbl"):
+            self._summary_lbl.setStyleSheet(f"color: {text_secondary};")
+        if hasattr(self, "_mode_toggle"):
+            self._mode_toggle._update_appearance()
+        if hasattr(self, "_domain_pills"):
+            for dpill in self._domain_pills:
+                dpill.setStyleSheet(f"background-color: {pill_bg}; color: {text_muted}; border: 1px solid {pill_border}; border-radius: 6px; padding: 4px 10px;")
+        if hasattr(self, "_step_badges"):
+            for sbadge in self._step_badges:
+                sbadge.setStyleSheet(f"background-color: {pill_bg}; color: {COLOR_ACCENT}; border: 1px solid {pill_border}; border-radius: 13px;")
+        if hasattr(self, "_step_titles"):
+            for st in self._step_titles:
+                st.setStyleSheet(f"color: {text_primary};")
+        if hasattr(self, "_step_descs"):
+            for sd in self._step_descs:
+                sd.setStyleSheet(f"color: {text_muted};")
+        self._update_type_pill_styles()
+        for chip in getattr(self, "_format_chips", {}).values():
+            chip._update_style()

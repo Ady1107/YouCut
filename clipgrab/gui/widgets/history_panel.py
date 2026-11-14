@@ -268,3 +268,15 @@ class HistoryPanel(QWidget):
         self._db.delete_entry(entry_id)
         self.refresh()
         self.status_message.emit("Entry removed from history")
+
+    def update_theme(self, theme_name: str) -> None:
+        """Update history panel elements for dark/light theme."""
+        is_dark = (theme_name == "dark")
+        count_col = "rgba(235, 235, 245, 0.45)" if is_dark else "#5A6170"
+        empty_col = "#666666" if is_dark else "#8A92A2"
+        if hasattr(self, "_count_label"):
+            self._count_label.setStyleSheet(f"color: {count_col};")
+        if hasattr(self, "_empty_label"):
+            self._empty_label.setStyleSheet(f"color: {empty_col}; padding: 40px;")
+        for widget in self._item_widgets:
+            widget.update_theme(is_dark)

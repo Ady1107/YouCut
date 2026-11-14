@@ -143,6 +143,8 @@ class ChipButton(QPushButton):
         return self._is_active
 
     def _update_style(self) -> None:
+        app = QApplication.instance()
+        is_dark = (app.property("current_theme") != "light") if app else True
         if self._is_active:
             self.setStyleSheet(
                 "QPushButton {"
@@ -154,17 +156,21 @@ class ChipButton(QPushButton):
                 "}"
             )
         else:
+            bg = BG_CARD_ALT if is_dark else "#EEF1F6"
+            fg = TEXT_SECONDARY if is_dark else "#111318"
+            border = BORDER_CARD_SUBTLE if is_dark else "#D8DCE5"
+            hover_bg = "#262A37" if is_dark else "#E2E6EE"
             self.setStyleSheet(
                 "QPushButton {"
-                f"  background-color: {BG_CARD_ALT};"
-                f"  color: {TEXT_SECONDARY};"
-                f"  border: 1px solid {BORDER_CARD_SUBTLE};"
+                f"  background-color: {bg};"
+                f"  color: {fg};"
+                f"  border: 1px solid {border};"
                 "  border-radius: 8px;"
                 "}"
-                "QPushButton:hover {"
-                "  background-color: #262A37;"
-                f"  color: {TEXT_PRIMARY};"
-                "}"
+                f"QPushButton:hover {{"
+                f"  background-color: {hover_bg};"
+                f"  color: {fg};"
+                f"}}"
             )
 
 
@@ -213,11 +219,19 @@ class SegmentedToggle(QFrame):
         return self._mode
 
     def _update_appearance(self) -> None:
+        app = QApplication.instance()
+        is_dark = (app.property("current_theme") != "light") if app else True
+        container_bg = BG_INPUT if is_dark else "#EEF1F6"
+        container_border = BORDER_INPUT if is_dark else "#D8DCE5"
+        self.setStyleSheet(
+            f"QFrame#segmentedToggle {{ background-color: {container_bg}; border-radius: 12px; border: 1px solid {container_border}; }}"
+        )
         active_style = (
             f"background-color: {COLOR_ACCENT}; color: #FFFFFF; border: none; border-radius: 10px;"
         )
+        inactive_fg = TEXT_SECONDARY if is_dark else "#5A6170"
         inactive_style = (
-            f"background-color: transparent; color: {TEXT_SECONDARY}; border: none; border-radius: 10px;"
+            f"background-color: transparent; color: {inactive_fg}; border: none; border-radius: 10px;"
         )
         if self._mode == "video":
             self._btn_video.setStyleSheet(active_style)
@@ -926,13 +940,13 @@ class YouTubePage(QWidget):
         url_bar_row = QHBoxLayout()
         url_bar_row.setSpacing(10)
 
-        url_input_box = QFrame()
-        url_input_box.setObjectName("urlInputBox")
-        url_input_box.setFixedHeight(44)
-        url_input_box.setStyleSheet(
+        self._url_input_box = QFrame()
+        self._url_input_box.setObjectName("urlInputBox")
+        self._url_input_box.setFixedHeight(44)
+        self._url_input_box.setStyleSheet(
             f"QFrame#urlInputBox {{ background-color: {BG_INPUT}; border: 1px solid {BORDER_INPUT}; border-radius: 12px; }}"
         )
-        url_box_layout = QHBoxLayout(url_input_box)
+        url_box_layout = QHBoxLayout(self._url_input_box)
         url_box_layout.setContentsMargins(12, 0, 12, 0)
         url_box_layout.setSpacing(8)
 
@@ -963,7 +977,7 @@ class YouTubePage(QWidget):
         self._valid_check.hide()
         url_box_layout.addWidget(self._valid_check)
 
-        url_bar_row.addWidget(url_input_box, stretch=1)
+        url_bar_row.addWidget(self._url_input_box, stretch=1)
 
         # Paste Button
         self._paste_btn = QPushButton("Paste")
@@ -1332,10 +1346,10 @@ class YouTubePage(QWidget):
         trim_title_col = QVBoxLayout()
         trim_title_col.setSpacing(2)
 
-        trim_title = QLabel("Trim your clip")
-        trim_title.setFont(get_font(pixel_size=18, weight=QFont.Weight.DemiBold))
-        trim_title.setStyleSheet(f"color: {TEXT_PRIMARY};")
-        trim_title_col.addWidget(trim_title)
+        self._trim_title = QLabel("Trim your clip")
+        self._trim_title.setFont(get_font(pixel_size=18, weight=QFont.Weight.DemiBold))
+        self._trim_title.setStyleSheet(f"color: {TEXT_PRIMARY};")
+        trim_title_col.addWidget(self._trim_title)
 
         self._trim_sub = QLabel("Drag the handles as you watch. Only the selected part is downloaded.")
         self._trim_sub.setFont(get_font(pixel_size=12))
@@ -1397,10 +1411,10 @@ class YouTubePage(QWidget):
 
         s_col = QVBoxLayout()
         s_col.setSpacing(2)
-        s_lbl = QLabel("START")
-        s_lbl.setFont(get_font(pixel_size=11, weight=QFont.Weight.DemiBold))
-        s_lbl.setStyleSheet(f"color: {TEXT_MUTED}; letter-spacing: 0.5px;")
-        s_col.addWidget(s_lbl)
+        self._s_lbl = QLabel("START")
+        self._s_lbl.setFont(get_font(pixel_size=11, weight=QFont.Weight.DemiBold))
+        self._s_lbl.setStyleSheet(f"color: {TEXT_MUTED}; letter-spacing: 0.5px;")
+        s_col.addWidget(self._s_lbl)
 
         self._start_tc = QLabel("00:00")
         self._start_tc.setFont(get_font(pixel_size=26, weight=QFont.Weight.DemiBold))
@@ -1411,29 +1425,29 @@ class YouTubePage(QWidget):
         s_btns_col = QHBoxLayout()
         s_btns_col.setSpacing(4)
 
-        s_m1 = QPushButton("-1s")
-        s_m1.setFixedSize(34, 26)
-        s_m1.setFont(get_font(pixel_size=11, weight=QFont.Weight.Medium))
-        s_m1.setCursor(Qt.CursorShape.PointingHandCursor)
-        s_m1.setStyleSheet(f"background-color: {BG_PILL}; color: {TEXT_SECONDARY}; border: 1px solid {BORDER_PILL}; border-radius: 6px; padding: 0;")
-        s_m1.clicked.connect(lambda: self._nudge_start(-1))
-        s_btns_col.addWidget(s_m1)
+        self._s_m1 = QPushButton("-1s")
+        self._s_m1.setFixedSize(34, 26)
+        self._s_m1.setFont(get_font(pixel_size=11, weight=QFont.Weight.Medium))
+        self._s_m1.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._s_m1.setStyleSheet(f"background-color: {BG_PILL}; color: {TEXT_SECONDARY}; border: 1px solid {BORDER_PILL}; border-radius: 6px; padding: 0;")
+        self._s_m1.clicked.connect(lambda: self._nudge_start(-1))
+        s_btns_col.addWidget(self._s_m1)
 
-        s_p1 = QPushButton("+1s")
-        s_p1.setFixedSize(34, 26)
-        s_p1.setFont(get_font(pixel_size=11, weight=QFont.Weight.Medium))
-        s_p1.setCursor(Qt.CursorShape.PointingHandCursor)
-        s_p1.setStyleSheet(f"background-color: {BG_PILL}; color: {TEXT_SECONDARY}; border: 1px solid {BORDER_PILL}; border-radius: 6px; padding: 0;")
-        s_p1.clicked.connect(lambda: self._nudge_start(1))
-        s_btns_col.addWidget(s_p1)
+        self._s_p1 = QPushButton("+1s")
+        self._s_p1.setFixedSize(34, 26)
+        self._s_p1.setFont(get_font(pixel_size=11, weight=QFont.Weight.Medium))
+        self._s_p1.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._s_p1.setStyleSheet(f"background-color: {BG_PILL}; color: {TEXT_SECONDARY}; border: 1px solid {BORDER_PILL}; border-radius: 6px; padding: 0;")
+        self._s_p1.clicked.connect(lambda: self._nudge_start(1))
+        s_btns_col.addWidget(self._s_p1)
 
-        s_use = QPushButton("Use playhead")
-        s_use.setFixedHeight(26)
-        s_use.setFont(get_font(pixel_size=11, weight=QFont.Weight.Medium))
-        s_use.setCursor(Qt.CursorShape.PointingHandCursor)
-        s_use.setStyleSheet(f"background-color: {BG_PILL}; color: {COLOR_ACCENT}; border: 1px solid {BORDER_PILL}; border-radius: 6px; padding: 0 6px;")
-        s_use.clicked.connect(self._use_playhead_as_start)
-        s_btns_col.addWidget(s_use)
+        self._s_use = QPushButton("Use playhead")
+        self._s_use.setFixedHeight(26)
+        self._s_use.setFont(get_font(pixel_size=11, weight=QFont.Weight.Medium))
+        self._s_use.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._s_use.setStyleSheet(f"background-color: {BG_PILL}; color: {COLOR_ACCENT}; border: 1px solid {BORDER_PILL}; border-radius: 6px; padding: 0 6px;")
+        self._s_use.clicked.connect(self._use_playhead_as_start)
+        s_btns_col.addWidget(self._s_use)
 
         start_layout.addLayout(s_btns_col)
         self._tc_layout.addWidget(self._start_card, stretch=1)
@@ -1458,10 +1472,10 @@ class YouTubePage(QWidget):
 
         e_col = QVBoxLayout()
         e_col.setSpacing(2)
-        e_lbl = QLabel("END")
-        e_lbl.setFont(get_font(pixel_size=11, weight=QFont.Weight.DemiBold))
-        e_lbl.setStyleSheet(f"color: {TEXT_MUTED}; letter-spacing: 0.5px;")
-        e_col.addWidget(e_lbl)
+        self._e_lbl = QLabel("END")
+        self._e_lbl.setFont(get_font(pixel_size=11, weight=QFont.Weight.DemiBold))
+        self._e_lbl.setStyleSheet(f"color: {TEXT_MUTED}; letter-spacing: 0.5px;")
+        e_col.addWidget(self._e_lbl)
 
         self._end_tc = QLabel("00:00")
         self._end_tc.setFont(get_font(pixel_size=26, weight=QFont.Weight.DemiBold))
@@ -1472,29 +1486,29 @@ class YouTubePage(QWidget):
         e_btns_col = QHBoxLayout()
         e_btns_col.setSpacing(4)
 
-        e_m1 = QPushButton("-1s")
-        e_m1.setFixedSize(34, 26)
-        e_m1.setFont(get_font(pixel_size=11, weight=QFont.Weight.Medium))
-        e_m1.setCursor(Qt.CursorShape.PointingHandCursor)
-        e_m1.setStyleSheet(f"background-color: {BG_PILL}; color: {TEXT_SECONDARY}; border: 1px solid {BORDER_PILL}; border-radius: 6px; padding: 0;")
-        e_m1.clicked.connect(lambda: self._nudge_end(-1))
-        e_btns_col.addWidget(e_m1)
+        self._e_m1 = QPushButton("-1s")
+        self._e_m1.setFixedSize(34, 26)
+        self._e_m1.setFont(get_font(pixel_size=11, weight=QFont.Weight.Medium))
+        self._e_m1.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._e_m1.setStyleSheet(f"background-color: {BG_PILL}; color: {TEXT_SECONDARY}; border: 1px solid {BORDER_PILL}; border-radius: 6px; padding: 0;")
+        self._e_m1.clicked.connect(lambda: self._nudge_end(-1))
+        e_btns_col.addWidget(self._e_m1)
 
-        e_p1 = QPushButton("+1s")
-        e_p1.setFixedSize(34, 26)
-        e_p1.setFont(get_font(pixel_size=11, weight=QFont.Weight.Medium))
-        e_p1.setCursor(Qt.CursorShape.PointingHandCursor)
-        e_p1.setStyleSheet(f"background-color: {BG_PILL}; color: {TEXT_SECONDARY}; border: 1px solid {BORDER_PILL}; border-radius: 6px; padding: 0;")
-        e_p1.clicked.connect(lambda: self._nudge_end(1))
-        e_btns_col.addWidget(e_p1)
+        self._e_p1 = QPushButton("+1s")
+        self._e_p1.setFixedSize(34, 26)
+        self._e_p1.setFont(get_font(pixel_size=11, weight=QFont.Weight.Medium))
+        self._e_p1.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._e_p1.setStyleSheet(f"background-color: {BG_PILL}; color: {TEXT_SECONDARY}; border: 1px solid {BORDER_PILL}; border-radius: 6px; padding: 0;")
+        self._e_p1.clicked.connect(lambda: self._nudge_end(1))
+        e_btns_col.addWidget(self._e_p1)
 
-        e_use = QPushButton("Use playhead")
-        e_use.setFixedHeight(26)
-        e_use.setFont(get_font(pixel_size=11, weight=QFont.Weight.Medium))
-        e_use.setCursor(Qt.CursorShape.PointingHandCursor)
-        e_use.setStyleSheet(f"background-color: {BG_PILL}; color: {COLOR_ACCENT}; border: 1px solid {BORDER_PILL}; border-radius: 6px; padding: 0 6px;")
-        e_use.clicked.connect(self._use_playhead_as_end)
-        e_btns_col.addWidget(e_use)
+        self._e_use = QPushButton("Use playhead")
+        self._e_use.setFixedHeight(26)
+        self._e_use.setFont(get_font(pixel_size=11, weight=QFont.Weight.Medium))
+        self._e_use.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._e_use.setStyleSheet(f"background-color: {BG_PILL}; color: {COLOR_ACCENT}; border: 1px solid {BORDER_PILL}; border-radius: 6px; padding: 0 6px;")
+        self._e_use.clicked.connect(self._use_playhead_as_end)
+        e_btns_col.addWidget(self._e_use)
 
         end_layout.addLayout(e_btns_col)
         self._tc_layout.addWidget(self._end_card, stretch=1)
@@ -1597,10 +1611,10 @@ class YouTubePage(QWidget):
         q_layout.setContentsMargins(16, 12, 16, 12)
         q_layout.setSpacing(10)
 
-        q_title = QLabel("Quality and format")
-        q_title.setFont(get_font(pixel_size=16, weight=QFont.Weight.DemiBold))
-        q_title.setStyleSheet(f"color: {TEXT_PRIMARY};")
-        q_layout.addWidget(q_title)
+        self._q_title = QLabel("Quality and format")
+        self._q_title.setFont(get_font(pixel_size=16, weight=QFont.Weight.DemiBold))
+        self._q_title.setStyleSheet(f"color: {TEXT_PRIMARY};")
+        q_layout.addWidget(self._q_title)
 
         self._mode_toggle = SegmentedToggle()
         self._mode_toggle.toggled.connect(self._on_mode_toggled)
@@ -1619,10 +1633,10 @@ class YouTubePage(QWidget):
         self._quality_combo.currentIndexChanged.connect(self._on_quality_changed)
         q_layout.addWidget(self._quality_combo)
 
-        fmt_lbl = QLabel("Output format")
-        fmt_lbl.setFont(get_font(pixel_size=12, weight=QFont.Weight.Medium))
-        fmt_lbl.setStyleSheet(f"color: {TEXT_SECONDARY};")
-        q_layout.addWidget(fmt_lbl)
+        self._fmt_lbl = QLabel("Output format")
+        self._fmt_lbl.setFont(get_font(pixel_size=12, weight=QFont.Weight.Medium))
+        self._fmt_lbl.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        q_layout.addWidget(self._fmt_lbl)
 
         self._chips_row = QHBoxLayout()
         self._chips_row.setSpacing(8)
@@ -1640,23 +1654,23 @@ class YouTubePage(QWidget):
         save_layout.setContentsMargins(16, 12, 16, 12)
         save_layout.setSpacing(8)
 
-        save_title = QLabel("Save")
-        save_title.setFont(get_font(pixel_size=16, weight=QFont.Weight.DemiBold))
-        save_title.setStyleSheet(f"color: {TEXT_PRIMARY};")
-        save_layout.addWidget(save_title)
+        self._save_title = QLabel("Save")
+        self._save_title.setFont(get_font(pixel_size=16, weight=QFont.Weight.DemiBold))
+        self._save_title.setStyleSheet(f"color: {TEXT_PRIMARY};")
+        save_layout.addWidget(self._save_title)
 
-        fn_lbl = QLabel("File name")
-        fn_lbl.setFont(get_font(pixel_size=12, weight=QFont.Weight.Medium))
-        fn_lbl.setStyleSheet(f"color: {TEXT_SECONDARY};")
-        save_layout.addWidget(fn_lbl)
+        self._fn_lbl = QLabel("File name")
+        self._fn_lbl.setFont(get_font(pixel_size=12, weight=QFont.Weight.Medium))
+        self._fn_lbl.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        save_layout.addWidget(self._fn_lbl)
 
-        fn_box = QFrame()
-        fn_box.setObjectName("fnBox")
-        fn_box.setFixedHeight(36)
-        fn_box.setStyleSheet(
+        self._fn_box = QFrame()
+        self._fn_box.setObjectName("fnBox")
+        self._fn_box.setFixedHeight(36)
+        self._fn_box.setStyleSheet(
             f"QFrame#fnBox {{ background-color: {BG_INPUT}; border: 1px solid {BORDER_INPUT}; border-radius: 10px; }}"
         )
-        fn_box_layout = QHBoxLayout(fn_box)
+        fn_box_layout = QHBoxLayout(self._fn_box)
         fn_box_layout.setContentsMargins(10, 0, 10, 0)
         fn_box_layout.setSpacing(4)
 
@@ -1670,12 +1684,13 @@ class YouTubePage(QWidget):
         self._ext_lbl.setFont(get_font(pixel_size=12, weight=QFont.Weight.Medium))
         self._ext_lbl.setStyleSheet(f"color: {TEXT_MUTED};")
         fn_box_layout.addWidget(self._ext_lbl)
-        save_layout.addWidget(fn_box)
+        save_layout.addWidget(self._fn_box)
 
-        fd_lbl = QLabel("Folder")
-        fd_lbl.setFont(get_font(pixel_size=12, weight=QFont.Weight.Medium))
-        fd_lbl.setStyleSheet(f"color: {TEXT_SECONDARY};")
-        save_layout.addWidget(fd_lbl)
+        self._fd_lbl = QLabel("Folder")
+        self._fd_lbl.setFont(get_font(pixel_size=12, weight=QFont.Weight.Medium))
+        self._fd_lbl.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        opt_layout = save_layout
+        save_layout.addWidget(self._fd_lbl)
 
         folder_row = QHBoxLayout()
         folder_row.setSpacing(6)
@@ -2561,6 +2576,15 @@ class YouTubePage(QWidget):
     # STATES MANAGEMENT
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+    def _update_info_card_style(self) -> None:
+        app = QApplication.instance()
+        is_dark = (app.property("current_theme") != "light") if app else True
+        card_bg = BG_CARD if is_dark else "#FFFFFF"
+        card_border = BORDER_CARD if is_dark else "#DCE0E8"
+        self._info_card.setStyleSheet(
+            f"QFrame#infoCard {{ background-color: {card_bg}; border: 1px solid {card_border}; border-radius: 20px; }}"
+        )
+
     def set_empty_state(self) -> None:
         """Render YouTube page in the clean Empty state (Defect 5)."""
         self._pause_playback()
@@ -2573,14 +2597,16 @@ class YouTubePage(QWidget):
         self._skeleton_box.hide()
         self._retry_btn.hide()
 
+        app = QApplication.instance()
+        is_dark = (app.property("current_theme") != "light") if app else True
+        title_col = TEXT_PRIMARY if is_dark else "#111318"
+
         # Info card
-        self._info_card.setStyleSheet(
-            f"QFrame#infoCard {{ background-color: {BG_CARD}; border: 1px solid {BORDER_CARD}; border-radius: 20px; }}"
-        )
+        self._update_info_card_style()
         self._status_badge.setText("● Ready to clip")
         self._status_badge.setStyleSheet(f"color: {TEXT_MUTED};")
         self._video_title.setText("Paste a YouTube link above")
-        self._video_title.setStyleSheet(f"color: {TEXT_PRIMARY};")
+        self._video_title.setStyleSheet(f"color: {title_col};")
         self._full_video_title = "Paste a YouTube link above"
         self._update_text_elisions()
         self._video_meta.setText("Preview, metadata, and clipping options will appear here")
@@ -2672,12 +2698,14 @@ class YouTubePage(QWidget):
         logger.info("[FETCH] UI populated into Loaded state successfully: '%s' (%s)", video_info.title, dur_str)
 
         # Info card
-        self._info_card.setStyleSheet(
-            f"QFrame#infoCard {{ background-color: {BG_CARD}; border: 1px solid {BORDER_CARD}; border-radius: 20px; }}"
-        )
+        self._update_info_card_style()
         self._status_badge.setText(f"● Video found · {dur_str}")
         self._status_badge.setStyleSheet(f"color: {COLOR_SUCCESS};")
         self._video_title.setText(video_info.title)
+        app = QApplication.instance()
+        is_dark = (app.property("current_theme") != "light") if app else True
+        title_col = TEXT_PRIMARY if is_dark else "#111318"
+        self._video_title.setStyleSheet(f"color: {title_col};")
         self._full_video_title = video_info.title
         self._update_text_elisions()
 
@@ -3052,3 +3080,211 @@ class YouTubePage(QWidget):
                 "end_seconds": None if self._is_full_video else self._end_seconds,
             }
             self.download_requested.emit(payload)
+
+    def update_theme(self, theme_name: str) -> None:
+        """Update YouTube page elements for dark/light theme."""
+        is_dark = (theme_name == "dark")
+        card_bg = BG_CARD if is_dark else "#FFFFFF"
+        card_border = BORDER_CARD if is_dark else "#DCE0E8"
+        card_alt_bg = BG_CARD_ALT if is_dark else "#F5F7FA"
+        card_alt_border = BORDER_CARD_SUBTLE if is_dark else "#E2E5EC"
+        input_bg = BG_INPUT if is_dark else "#FFFFFF"
+        input_border = BORDER_INPUT if is_dark else "#CCD1DC"
+        text_primary = TEXT_PRIMARY if is_dark else "#111318"
+        text_secondary = TEXT_SECONDARY if is_dark else "#5A6170"
+        text_muted = TEXT_MUTED if is_dark else "#8A92A2"
+        pill_bg = BG_PILL if is_dark else "#EEF1F6"
+        pill_border = BORDER_PILL if is_dark else "#CCD1DC"
+        input_fg = "#FFFFFF" if is_dark else "#111318"
+        btn_hover = "#1C1F2B" if is_dark else "#F5F7FA"
+
+        if hasattr(self, "_url_input_box"):
+            self._url_input_box.setStyleSheet(
+                f"QFrame#urlInputBox {{ background-color: {input_bg}; border: 1px solid {input_border}; border-radius: 12px; }}"
+            )
+        if hasattr(self, "_url_input"):
+            self._url_input.setStyleSheet(f"QLineEdit {{ background: transparent; border: none; color: {input_fg}; padding: 0; }}")
+        if hasattr(self, "_paste_btn"):
+            self._paste_btn.setStyleSheet(
+                f"QPushButton {{ background-color: {card_bg}; color: {text_primary}; border: 1px solid {card_border}; border-radius: 10px; padding: 0 16px; }}"
+                f"QPushButton:hover {{ background-color: {btn_hover}; }}"
+            )
+        if hasattr(self, "_preview_card"):
+            self._preview_card.setStyleSheet(
+                f"QFrame#previewCard {{ background-color: {card_bg}; border: 1px solid {card_border}; border-radius: 20px; }}"
+            )
+        if hasattr(self, "_trim_card"):
+            self._trim_card.setStyleSheet(
+                f"QFrame#trimCard {{ background-color: {card_bg}; border: 1px solid {card_border}; border-radius: 20px; }}"
+            )
+        if hasattr(self, "_trim_title"):
+            self._trim_title.setStyleSheet(f"color: {text_primary};")
+        if hasattr(self, "_trim_sub"):
+            self._trim_sub.setStyleSheet(f"color: {text_secondary};")
+        if hasattr(self, "_live_chip"):
+            self._live_chip.setStyleSheet(f"background-color: {pill_bg}; color: {text_secondary}; border-radius: 14px; padding: 4px 12px;")
+        if hasattr(self, "_res_chip"):
+            self._res_chip.setStyleSheet(f"background-color: {pill_bg}; color: {text_secondary}; border-radius: 14px; padding: 4px 12px;")
+        if hasattr(self, "_duration_badge"):
+            self._duration_badge.setStyleSheet(f"background-color: {pill_bg}; color: {text_secondary}; border-radius: 14px; padding: 4px 12px;")
+        if hasattr(self, "_full_video_btn"):
+            self._full_video_btn.setStyleSheet(
+                f"QPushButton {{ background-color: {pill_bg}; color: {text_secondary}; border: 1px solid {pill_border}; border-radius: 14px; padding: 0 12px; }}"
+            )
+        if hasattr(self, "_start_card"):
+            self._start_card.setStyleSheet(
+                f"QFrame#startCard {{ background-color: {card_alt_bg}; border: 1px solid {card_alt_border}; border-radius: 12px; }}"
+            )
+        if hasattr(self, "_end_card"):
+            self._end_card.setStyleSheet(
+                f"QFrame#endCard {{ background-color: {card_alt_bg}; border: 1px solid {card_alt_border}; border-radius: 12px; }}"
+            )
+        if hasattr(self, "_start_tc"):
+            self._start_tc.setStyleSheet(f"color: {text_primary};")
+        if hasattr(self, "_end_tc"):
+            self._end_tc.setStyleSheet(f"color: {text_primary};")
+        if hasattr(self, "_s_lbl"):
+            self._s_lbl.setStyleSheet(f"color: {text_muted}; letter-spacing: 0.5px;")
+        if hasattr(self, "_e_lbl"):
+            self._e_lbl.setStyleSheet(f"color: {text_muted}; letter-spacing: 0.5px;")
+        if hasattr(self, "_arrow_lbl"):
+            self._arrow_lbl.setStyleSheet(f"color: {text_muted};")
+
+        # Nudge & Use playhead buttons
+        for btn in (getattr(self, "_s_m1", None), getattr(self, "_s_p1", None), getattr(self, "_e_m1", None), getattr(self, "_e_p1", None)):
+            if btn:
+                btn.setStyleSheet(f"background-color: {pill_bg}; color: {text_secondary}; border: 1px solid {pill_border}; border-radius: 6px; padding: 0;")
+        for btn in (getattr(self, "_s_use", None), getattr(self, "_e_use", None)):
+            if btn:
+                btn.setStyleSheet(f"background-color: {pill_bg}; color: {COLOR_ACCENT}; border: 1px solid {pill_border}; border-radius: 6px; padding: 0 6px;")
+
+        # Preset buttons
+        if hasattr(self, "_preset_buttons"):
+            for p_btn in self._preset_buttons:
+                p_btn.setStyleSheet(
+                    f"QPushButton {{ background-color: {pill_bg}; color: {text_secondary}; border: 1px solid {pill_border}; border-radius: 6px; padding: 0 8px; }}"
+                    f"QPushButton:hover {{ background-color: {btn_hover}; color: {text_primary}; }}"
+                    f"QPushButton:disabled {{ background-color: transparent; color: {text_muted}; border-color: {card_alt_border}; }}"
+                )
+        if hasattr(self, "_exact_lbl"):
+            self._exact_lbl.setStyleSheet(f"color: {text_secondary};")
+
+        # Player Controls Bar
+        icon_color = "#FFFFFF" if is_dark else "#111318"
+        ctrl_bg = "rgba(255, 255, 255, 0.08)" if is_dark else "#EEF1F6"
+        ctrl_border = "rgba(255, 255, 255, 0.15)" if is_dark else "#D8DCE5"
+        ctrl_hover = "rgba(255, 255, 255, 0.16)" if is_dark else "#E2E6EE"
+        ctrl_fg = text_primary
+
+        if hasattr(self, "_rewind_btn"):
+            self._rewind_btn.setIcon(get_svg_icon("skip-back", color=icon_color, size=16))
+        if hasattr(self, "_play_btn"):
+            icon_name = "pause" if getattr(self, "_is_playing", False) else "play"
+            self._play_btn.setIcon(get_svg_icon(icon_name, color=icon_color, size=16))
+        if hasattr(self, "_forward_btn"):
+            self._forward_btn.setIcon(get_svg_icon("skip-forward", color=icon_color, size=16))
+        if hasattr(self, "_volume_btn"):
+            self._volume_btn.setIcon(get_svg_icon("volume", color=text_secondary, size=16))
+        if hasattr(self, "_volume_lbl"):
+            self._volume_lbl.setStyleSheet(f"color: {text_primary};")
+        if hasattr(self, "_timecode_lbl"):
+            self._timecode_lbl.setStyleSheet(f"color: {text_muted};")
+
+        # Quality, Speed, CC buttons
+        for btn in (getattr(self, "_quality_btn", None), getattr(self, "_speed_btn", None), getattr(self, "_cc_btn", None)):
+            if btn:
+                btn.setStyleSheet(
+                    f"QPushButton {{ background-color: {ctrl_bg}; color: {ctrl_fg}; border: 1px solid {ctrl_border}; border-radius: 14px; padding: 0 8px; }}"
+                    f"QPushButton:hover {{ background-color: {ctrl_hover}; }}"
+                )
+        if hasattr(self, "_playback_settings_btn"):
+            self._playback_settings_btn.setIcon(get_svg_icon("settings", color=text_secondary, size=16))
+        if hasattr(self, "_more_btn"):
+            self._more_btn.setIcon(get_svg_icon("more-horizontal", color=text_secondary, size=16))
+
+        # Sliders
+        slider_groove = "rgba(255, 255, 255, 0.2)" if is_dark else "#D8DCE5"
+        slider_sub = "#FFFFFF" if is_dark else COLOR_ACCENT
+        slider_handle = "#FFFFFF" if is_dark else COLOR_ACCENT
+        if hasattr(self, "_volume_slider"):
+            self._volume_slider.setStyleSheet(
+                f"QSlider::groove:horizontal {{ height: 4px; background: {slider_groove}; border-radius: 2px; }}"
+                f"QSlider::sub-page:horizontal {{ background: {slider_sub}; border-radius: 2px; }}"
+                f"QSlider::handle:horizontal {{ background: {slider_handle}; border: none; width: 10px; height: 10px; margin: -3px 0; border-radius: 5px; }}"
+            )
+        if hasattr(self, "_scrubber_slider"):
+            self._scrubber_slider.setStyleSheet(
+                "QSlider#playerScrubber { height: 16px; }"
+                f"QSlider#playerScrubber::groove:horizontal {{ height: 3px; background: {slider_groove}; border-radius: 1.5px; }}"
+                f"QSlider#playerScrubber::sub-page:horizontal {{ background: {slider_sub}; border-radius: 1.5px; }}"
+                f"QSlider#playerScrubber::handle:horizontal {{ background: {slider_handle}; border: none; width: 8px; height: 8px; margin: -2.5px 0; border-radius: 4px; }}"
+            )
+        if hasattr(self, "_in_point_shortcut_lbl"):
+            self._in_point_shortcut_lbl.setStyleSheet(f"color: {text_muted};")
+        if hasattr(self, "_out_point_shortcut_lbl"):
+            self._out_point_shortcut_lbl.setStyleSheet(f"color: {text_muted};")
+
+        # Info Card
+        self._update_info_card_style()
+        if hasattr(self, "_video_title") and not (self._video_info is None and hasattr(self, "_is_error_state") and self._is_error_state):
+            self._video_title.setStyleSheet(f"color: {text_primary};")
+        if hasattr(self, "_video_meta"):
+            self._video_meta.setStyleSheet(f"color: {text_secondary};")
+
+        # Quality Card
+        if hasattr(self, "_quality_card"):
+            self._quality_card.setStyleSheet(
+                f"QFrame#qualityCard {{ background-color: {card_bg}; border: 1px solid {card_border}; border-radius: 20px; }}"
+            )
+        if hasattr(self, "_q_title"):
+            self._q_title.setStyleSheet(f"color: {text_primary};")
+        if hasattr(self, "_quality_lbl"):
+            self._quality_lbl.setStyleSheet(f"color: {text_secondary};")
+        if hasattr(self, "_fmt_lbl"):
+            self._fmt_lbl.setStyleSheet(f"color: {text_secondary};")
+        if hasattr(self, "_mode_toggle"):
+            self._mode_toggle._update_appearance()
+        if hasattr(self, "_format_chips"):
+            for chip in self._format_chips.values():
+                chip._update_style()
+
+        # Save Card
+        if hasattr(self, "_save_card"):
+            self._save_card.setStyleSheet(
+                f"QFrame#saveCard {{ background-color: {card_bg}; border: 1px solid {card_border}; border-radius: 20px; }}"
+            )
+        if hasattr(self, "_save_title"):
+            self._save_title.setStyleSheet(f"color: {text_primary};")
+        if hasattr(self, "_fn_lbl"):
+            self._fn_lbl.setStyleSheet(f"color: {text_secondary};")
+        if hasattr(self, "_fn_box"):
+            self._fn_box.setStyleSheet(
+                f"QFrame#fnBox {{ background-color: {input_bg}; border: 1px solid {input_border}; border-radius: 10px; }}"
+            )
+        if hasattr(self, "_filename_input"):
+            self._filename_input.setStyleSheet(f"background: transparent; border: none; color: {input_fg};")
+        if hasattr(self, "_ext_lbl"):
+            self._ext_lbl.setStyleSheet(f"color: {text_muted};")
+        if hasattr(self, "_fd_lbl"):
+            self._fd_lbl.setStyleSheet(f"color: {text_secondary};")
+        if hasattr(self, "_folder_input"):
+            self._folder_input.setStyleSheet(
+                f"QLineEdit {{ background-color: {input_bg}; color: {text_secondary}; border: 1px solid {input_border}; border-radius: 10px; padding: 0 10px; }}"
+            )
+        if hasattr(self, "_browse_btn"):
+            self._browse_btn.setStyleSheet(
+                f"QPushButton {{ background-color: {pill_bg}; color: {text_primary}; border: 1px solid {pill_border}; border-radius: 10px; padding: 0 12px; }}"
+                f"QPushButton:hover {{ background-color: {btn_hover}; }}"
+            )
+
+        # Action Buttons
+        if hasattr(self, "_summary_lbl"):
+            self._summary_lbl.setStyleSheet(f"color: {text_secondary};")
+        if hasattr(self, "_size_lbl"):
+            self._size_lbl.setStyleSheet(f"color: {text_secondary};")
+        if hasattr(self, "_queue_btn"):
+            self._queue_btn.setStyleSheet(
+                f"QPushButton {{ background-color: {card_bg}; color: {text_primary}; border: 1px solid {card_border}; border-radius: 12px; }}"
+                f"QPushButton:hover {{ background-color: {btn_hover}; }}"
+                f"QPushButton:disabled {{ background-color: {card_bg}; color: {text_muted}; border-color: {card_alt_border}; }}"
+            )

@@ -46,6 +46,7 @@ from clipgrab.gui.sections import (
 from clipgrab.gui.theme import (
     BG_APP,
     BORDER_DIVIDER,
+    BORDER_DIVIDER_LIGHT,
     MIN_WINDOW_HEIGHT,
     MIN_WINDOW_WIDTH,
     apply_theme,
@@ -90,6 +91,7 @@ class MainWindow(QMainWindow):
         self._connect_signals()
         self._setup_shortcuts()
         self._restore_geometry()
+        self._apply_theme_to_all_pages(getattr(self._settings, "theme", "dark"))
         self._start_background_services()
 
     def _setup_window(self) -> None:
@@ -130,6 +132,7 @@ class MainWindow(QMainWindow):
         sep.setStyleSheet(f"background-color: {BORDER_DIVIDER};")
         sep.setFixedWidth(1)
         main_layout.addWidget(sep)
+        self._sep = sep
 
         # ─── 2. Content Stack Area (Navigation by Section ID) ─────────────────
         self._stack = QStackedWidget()
@@ -709,7 +712,21 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app:
             new_theme = toggle_theme(app, self._settings)
-            self._settings_panel.update_theme_button(new_theme)
+            self._apply_theme_to_all_pages(new_theme)
+
+    def _apply_theme_to_all_pages(self, theme_name: str) -> None:
+        """Apply theme color and styling updates across all pages and widgets."""
+        is_dark = (theme_name == "dark")
+        sep_color = BORDER_DIVIDER if is_dark else BORDER_DIVIDER_LIGHT
+        if hasattr(self, "_sep") and self._sep:
+            self._sep.setStyleSheet(f"background-color: {sep_color};")
+        if hasattr(self, "_sidebar") and self._sidebar:
+            self._sidebar.update_theme(theme_name)
+        if hasattr(self, "_settings_panel") and self._settings_panel:
+            self._settings_panel.update_theme(theme_name)
+        for page in getattr(self, "_pages", {}).values():
+            if page is not getattr(self, "_settings_panel", None) and hasattr(page, "update_theme"):
+                page.update_theme(theme_name)
 
     def _on_settings_changed(self) -> None:
         folder = self._settings.last_output_folder

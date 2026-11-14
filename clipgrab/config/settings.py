@@ -125,9 +125,9 @@ class AppSettings:
         default_dl = _get_default_downloads_dir()
         if (
             not self.last_output_folder
-            or "test_out" in self.last_output_folder
-            or "scratch" in self.last_output_folder
-            or not os.path.isdir(self.last_output_folder)
+            or "test_out" in str(self.last_output_folder)
+            or "scratch" in str(self.last_output_folder)
+            or not os.path.isdir(str(self.last_output_folder))
         ):
             self.last_output_folder = default_dl
 

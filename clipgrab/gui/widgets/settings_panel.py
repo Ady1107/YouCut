@@ -8,6 +8,7 @@ Includes a prominent app-update banner when a new YouCut version is found.
 
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal
@@ -244,8 +245,8 @@ class SettingsPanel(QWidget):
             "Access age-restricted, private, or member-only videos by authenticating through your browser or a cookies file."
         )
         auth_intro.setFont(QFont("Segoe UI", 9))
-        auth_intro.setStyleSheet("color: rgba(235, 235, 245, 0.6);")
         auth_intro.setWordWrap(True)
+        self._auth_intro = auth_intro
         auth_layout.addWidget(auth_intro)
 
         browser_row = QHBoxLayout()
@@ -345,14 +346,15 @@ class SettingsPanel(QWidget):
         layout.addStretch()
 
         # ── Credits ───────────────────────────────────────────────────────
-        credit_label = QLabel("Made by sHUBH")
-        credit_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Medium))
-        credit_label.setStyleSheet("color: rgba(235, 235, 245, 0.35);")
-        credit_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
-        layout.addWidget(credit_label)
+        self._credit_label = QLabel("Made by sHUBH")
+        self._credit_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Medium))
+        self._credit_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
+        layout.addWidget(self._credit_label)
 
         scroll.setWidget(content_widget)
         root_layout.addWidget(scroll)
+
+        self.update_theme(getattr(self._settings, "theme", "dark"))
 
     def _load_from_settings(self) -> None:
         """Load current values from AppSettings."""
@@ -450,6 +452,30 @@ class SettingsPanel(QWidget):
         else:
             self._ffmpeg_version_label.setText("FFmpeg: ⚠️ Not found")
             self._ffmpeg_version_label.setStyleSheet("color: #e74c3c;")
+
+    def update_theme(self, theme_name: str) -> None:
+        """Update colors and styling for the current theme."""
+        is_dark = (theme_name == "dark")
+        self.update_theme_button(theme_name)
+
+        if is_dark:
+            self._banner_version_label.setStyleSheet("color: rgba(235, 235, 245, 0.6);")
+            self._banner_notes.setStyleSheet("color: rgba(235, 235, 245, 0.7);")
+            if hasattr(self, "_auth_intro"):
+                self._auth_intro.setStyleSheet("color: rgba(235, 235, 245, 0.6);")
+            if hasattr(self, "_notify_label"):
+                self._notify_label.setStyleSheet("color: rgba(235, 235, 245, 0.4);")
+            if hasattr(self, "_credit_label"):
+                self._credit_label.setStyleSheet("color: rgba(235, 235, 245, 0.35);")
+        else:
+            self._banner_version_label.setStyleSheet("color: #5A6170;")
+            self._banner_notes.setStyleSheet("color: #111318;")
+            if hasattr(self, "_auth_intro"):
+                self._auth_intro.setStyleSheet("color: #5A6170;")
+            if hasattr(self, "_notify_label"):
+                self._notify_label.setStyleSheet("color: #5A6170;")
+            if hasattr(self, "_credit_label"):
+                self._credit_label.setStyleSheet("color: #8A92A2;")
 
     def update_theme_button(self, current_theme: str) -> None:
         """Update the theme toggle button and combo box after a theme change."""

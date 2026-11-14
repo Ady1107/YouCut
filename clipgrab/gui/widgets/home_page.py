@@ -100,11 +100,11 @@ class PlatformTileCard(QFrame):
         self.update_theme(is_dark)
 
     def update_theme(self, is_dark: bool) -> None:
-        bg = "rgba(28, 28, 36, 0.9)" if is_dark else "rgba(255, 255, 255, 0.95)"
-        border = "rgba(255, 255, 255, 0.08)" if is_dark else "rgba(0, 0, 0, 0.1)"
-        hover_bg = "rgba(45, 45, 58, 0.98)" if is_dark else "rgba(240, 240, 248, 0.98)"
-        name_col = "#ffffff" if is_dark else "#181820"
-        desc_col = "rgba(235, 235, 245, 0.7)" if is_dark else "rgba(24, 24, 32, 0.7)"
+        bg = "rgba(28, 28, 36, 0.9)" if is_dark else "#FFFFFF"
+        border = "rgba(255, 255, 255, 0.08)" if is_dark else "#DCE0E8"
+        hover_bg = "rgba(45, 45, 58, 0.98)" if is_dark else "#F8F9FB"
+        name_col = "#ffffff" if is_dark else "#111318"
+        desc_col = "rgba(235, 235, 245, 0.7)" if is_dark else "#5A6170"
 
         self.setStyleSheet(
             f"PlatformTileCard {{"
@@ -191,11 +191,11 @@ class RecentDownloadCard(QFrame):
         self.update_theme(is_dark)
 
     def update_theme(self, is_dark: bool) -> None:
-        bg = "rgba(28, 28, 36, 0.85)" if is_dark else "rgba(255, 255, 255, 0.95)"
-        border = "rgba(255, 255, 255, 0.08)" if is_dark else "rgba(0, 0, 0, 0.1)"
-        hover_bg = "rgba(42, 42, 54, 0.95)" if is_dark else "rgba(240, 240, 248, 0.98)"
-        t_col = "#ffffff" if is_dark else "#181820"
-        m_col = "rgba(235, 235, 245, 0.6)" if is_dark else "rgba(24, 24, 32, 0.65)"
+        bg = "rgba(28, 28, 36, 0.85)" if is_dark else "#FFFFFF"
+        border = "rgba(255, 255, 255, 0.08)" if is_dark else "#DCE0E8"
+        hover_bg = "rgba(42, 42, 54, 0.95)" if is_dark else "#F8F9FB"
+        t_col = "#ffffff" if is_dark else "#111318"
+        m_col = "rgba(235, 235, 245, 0.6)" if is_dark else "#5A6170"
 
         self.setStyleSheet(
             f"RecentDownloadCard {{ background: {bg}; border: 1px solid {border}; border-radius: 8px; }}"
@@ -532,10 +532,10 @@ class HomePage(QWidget):
     def update_theme(self, theme_name: str) -> None:
         """Update Home page elements for dark/light theme."""
         self._is_dark = (theme_name == "dark")
-        text_col = "#ffffff" if self._is_dark else "#181820"
-        sub_col = "rgba(235, 235, 245, 0.7)" if self._is_dark else "rgba(24, 24, 32, 0.65)"
-        card_bg = "rgba(24, 24, 32, 0.95)" if self._is_dark else "rgba(255, 255, 255, 0.95)"
-        border_col = "rgba(255, 255, 255, 0.1)" if self._is_dark else "rgba(0, 0, 0, 0.1)"
+        text_col = "#ffffff" if self._is_dark else "#111318"
+        sub_col = "rgba(235, 235, 245, 0.7)" if self._is_dark else "#5A6170"
+        card_bg = "rgba(24, 24, 32, 0.95)" if self._is_dark else "#FFFFFF"
+        border_col = "rgba(255, 255, 255, 0.1)" if self._is_dark else "#DCE0E8"
 
         self._title_lbl.setStyleSheet(f"color: {text_col};")
         self._sub_lbl.setStyleSheet(f"color: {sub_col};")

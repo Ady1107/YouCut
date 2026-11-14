@@ -34,8 +34,12 @@ from clipgrab.gui.theme import (
     BG_APP,
     BG_CARD,
     BG_PILL,
+    BG_SIDEBAR,
+    BG_SIDEBAR_LIGHT,
     BORDER_CARD,
+    BORDER_CARD_LIGHT,
     BORDER_DIVIDER,
+    BORDER_DIVIDER_LIGHT,
     COLOR_ACCENT,
     COLOR_ERROR,
     COLOR_SUCCESS,
@@ -43,7 +47,9 @@ from clipgrab.gui.theme import (
     SIDEBAR_COLLAPSED_WIDTH,
     SIDEBAR_WIDTH,
     TEXT_MUTED,
+    TEXT_MUTED_LIGHT,
     TEXT_PRIMARY,
+    TEXT_PRIMARY_LIGHT,
     TEXT_SECONDARY,
     get_font,
 )
@@ -96,36 +102,48 @@ class SidebarNavButton(QPushButton):
         align = "center" if self._is_collapsed else "left"
         pad_left = "0px" if self._is_collapsed else "12px"
         icon_size = 20 if self._is_collapsed else 18
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        is_dark = (app.property("current_theme") != "light") if app else True
+
+        active_bg = "#171923" if is_dark else "#FFFFFF"
+        active_border = "#282C3C" if is_dark else "#CCD1DC"
+        active_text = "#F3F4F7" if is_dark else "#111318"
+
+        normal_text = "#9BA1B0" if is_dark else "#5A6170"
+        hover_bg = "rgba(255, 255, 255, 0.04)" if is_dark else "#DDE1EA"
+        hover_border = "#1E212D" if is_dark else "#CCD1DC"
+        hover_text = "#F3F4F7" if is_dark else "#111318"
 
         if self._is_active:
             self.setIcon(get_svg_icon(self._icon_name, color=COLOR_ACCENT, size=icon_size))
             self.setFont(get_font(point_size=10, weight=QFont.Weight.DemiBold))
             self.setStyleSheet(
                 "QPushButton {"
-                f"  background-color: #171923;"
-                f"  color: {TEXT_PRIMARY};"
-                f"  border: 1px solid #282C3C;"
+                f"  background-color: {active_bg};"
+                f"  color: {active_text};"
+                f"  border: 1px solid {active_border};"
                 f"  border-radius: 10px;"
                 f"  text-align: {align};"
                 f"  padding-left: {pad_left};"
                 "}"
             )
         else:
-            self.setIcon(get_svg_icon(self._icon_name, color=TEXT_SECONDARY, size=icon_size))
+            self.setIcon(get_svg_icon(self._icon_name, color=normal_text, size=icon_size))
             self.setFont(get_font(point_size=10, weight=QFont.Weight.Medium))
             self.setStyleSheet(
                 "QPushButton {"
                 "  background-color: transparent;"
-                f"  color: {TEXT_SECONDARY};"
+                f"  color: {normal_text};"
                 "  border: 1px solid transparent;"
                 "  border-radius: 10px;"
                 f"  text-align: {align};"
                 f"  padding-left: {pad_left};"
                 "}"
                 "QPushButton:hover {"
-                "  background-color: rgba(255, 255, 255, 0.04);"
-                f"  color: {TEXT_PRIMARY};"
-                f"  border: 1px solid #1E212D;"
+                f"  background-color: {hover_bg};"
+                f"  color: {hover_text};"
+                f"  border: 1px solid {hover_border};"
                 "}"
             )
 
@@ -161,13 +179,20 @@ class StatusPill(QFrame):
         self._text_lbl.setStyleSheet(f"color: {TEXT_SECONDARY};")
         layout.addWidget(self._text_lbl, stretch=1)
 
+        self.update_theme(True)
+
+    def update_theme(self, is_dark: bool) -> None:
+        bg = "rgba(255, 255, 255, 0.03)" if is_dark else "#FFFFFF"
+        border = "#1E222F" if is_dark else "#DCE0E8"
+        text_col = TEXT_SECONDARY if is_dark else "#5A6170"
         self.setStyleSheet(
-            "StatusPill {"
-            "  background-color: rgba(255, 255, 255, 0.03);"
-            f"  border: 1px solid #1E222F;"
-            "  border-radius: 16px;"
-            "}"
+            f"StatusPill {{"
+            f"  background-color: {bg};"
+            f"  border: 1px solid {border};"
+            f"  border-radius: 16px;"
+            f"}}"
         )
+        self._text_lbl.setStyleSheet(f"color: {text_col};")
 
     def set_status(self, text: str, state: str = "ready") -> None:
         """
@@ -275,11 +300,11 @@ class Sidebar(QWidget):
         layout.addSpacing(12)
 
         # ── 5. Divider ───────────────────────────────────────────────────────
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet(f"background-color: {BORDER_DIVIDER};")
-        sep.setFixedHeight(1)
-        layout.addWidget(sep)
+        self._sep = QFrame()
+        self._sep.setFrameShape(QFrame.Shape.HLine)
+        self._sep.setStyleSheet(f"background-color: {BORDER_DIVIDER};")
+        self._sep.setFixedHeight(1)
+        layout.addWidget(self._sep)
 
         layout.addSpacing(8)
 
@@ -375,5 +400,21 @@ class Sidebar(QWidget):
         self._status_pill.set_status(text, state=state)
 
     def update_theme(self, theme_name: str) -> None:
-        """Stub for theme updates — dark theme active."""
-        pass
+        """Update sidebar elements for dark/light theme."""
+        is_dark = (theme_name == "dark")
+        bg = BG_SIDEBAR if is_dark else BG_SIDEBAR_LIGHT
+        title_col = TEXT_PRIMARY if is_dark else TEXT_PRIMARY_LIGHT
+        plat_col = TEXT_MUTED if is_dark else TEXT_MUTED_LIGHT
+        sep_col = BORDER_DIVIDER if is_dark else BORDER_DIVIDER_LIGHT
+
+        self.setStyleSheet(f"Sidebar {{ background-color: {bg}; }}")
+        if hasattr(self, "_logo_title"):
+            self._logo_title.setStyleSheet(f"color: {title_col}; letter-spacing: 0.3px;")
+        if hasattr(self, "_platforms_lbl"):
+            self._platforms_lbl.setStyleSheet(f"color: {plat_col}; letter-spacing: 1.2px; padding-left: 6px;")
+        if hasattr(self, "_sep"):
+            self._sep.setStyleSheet(f"background-color: {sep_col};")
+        if hasattr(self, "_status_pill"):
+            self._status_pill.update_theme(is_dark)
+        for btn in self._nav_buttons.values():
+            btn._update_appearance()

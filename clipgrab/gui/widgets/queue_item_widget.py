@@ -13,6 +13,7 @@ from typing import Optional
 from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QFont, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -38,18 +39,30 @@ _STATUS_COLORS = {
 }
 
 
-_STYLE_CARD_DOWNLOADING = (
-    "QueueItemWidget { background-color: rgba(245, 158, 11, 0.05); border: 1px solid rgba(245, 158, 11, 0.45); border-radius: 12px; }"
-)
-_STYLE_CARD_DONE = (
-    "QueueItemWidget { background-color: rgba(34, 197, 94, 0.05); border: 1px solid rgba(34, 197, 94, 0.45); border-radius: 12px; }"
-)
-_STYLE_CARD_FAILED = (
-    "QueueItemWidget { background-color: rgba(239, 68, 68, 0.05); border: 1px solid rgba(239, 68, 68, 0.45); border-radius: 12px; }"
-)
-_STYLE_CARD_DEFAULT = (
-    "QueueItemWidget { background-color: #171922; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 12px; }"
-)
+def _get_card_style(status: QueueItemStatus, is_dark: bool) -> str:
+    if status == QueueItemStatus.DOWNLOADING:
+        if is_dark:
+            return "QueueItemWidget { background-color: rgba(245, 158, 11, 0.05); border: 1px solid rgba(245, 158, 11, 0.45); border-radius: 12px; }"
+        else:
+            return "QueueItemWidget { background-color: #FFFBEB; border: 1px solid #F59E0B; border-radius: 12px; }"
+    elif status in (QueueItemStatus.DONE, QueueItemStatus.WARNING):
+        if is_dark:
+            return "QueueItemWidget { background-color: rgba(34, 197, 94, 0.05); border: 1px solid rgba(34, 197, 94, 0.45); border-radius: 12px; }"
+        else:
+            return "QueueItemWidget { background-color: #F0FDF4; border: 1px solid #22C55E; border-radius: 12px; }"
+    elif status == QueueItemStatus.FAILED:
+        if is_dark:
+            return "QueueItemWidget { background-color: rgba(239, 68, 68, 0.05); border: 1px solid rgba(239, 68, 68, 0.45); border-radius: 12px; }"
+        else:
+            return "QueueItemWidget { background-color: #FEF2F2; border: 1px solid #EF4444; border-radius: 12px; }"
+    else:
+        if is_dark:
+            return "QueueItemWidget { background-color: #171922; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 12px; }"
+        else:
+            return "QueueItemWidget { background-color: #FFFFFF; border: 1px solid #DCE0E8; border-radius: 12px; }"
+
+_STYLE_CARD_DOWNLOADING = _get_card_style(QueueItemStatus.DOWNLOADING, is_dark=True)
+_STYLE_CARD_DONE = _get_card_style(QueueItemStatus.DONE, is_dark=True)
 
 _PROGRESS_STYLE_ORANGE = (
     "QProgressBar {"
@@ -107,11 +120,32 @@ class QueueItemWidget(QFrame):
     def __init__(self, item: QueueItem, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._item_id = item.id
+        self._last_item: Optional[QueueItem] = None
+        app = QApplication.instance()
+        self._is_dark = (app.property("current_theme") != "light") if app else True
         self.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
         self.setLineWidth(1)
         self.setMinimumHeight(80)
         self._setup_ui()
+        self.update_theme(self._is_dark)
         self.update_from_item(item)
+
+    def update_theme(self, is_dark: bool) -> None:
+        """Update queue item styles for dark/light theme."""
+        self._is_dark = is_dark
+        title_col = "#F3F4F7" if is_dark else "#111318"
+        meta_col = "rgba(235, 235, 245, 0.45)" if is_dark else "#5A6170"
+        thumb_bg = "rgba(28, 28, 36, 0.5)" if is_dark else "#E9EBF0"
+        if hasattr(self, "_title_label"):
+            self._title_label.setStyleSheet(f"color: {title_col};")
+        if hasattr(self, "_time_label"):
+            self._time_label.setStyleSheet(f"color: {meta_col};")
+        if hasattr(self, "_quality_label"):
+            self._quality_label.setStyleSheet(f"color: {meta_col};")
+        if hasattr(self, "_thumbnail") and not self._thumbnail.pixmap():
+            self._thumbnail.setStyleSheet(f"background: {thumb_bg}; border-radius: 8px; color: #666;")
+        if self._last_item:
+            self.setStyleSheet(_get_card_style(self._last_item.status, self._is_dark))
 
     def _setup_ui(self) -> None:
         """Set up the queue item card UI."""
@@ -333,10 +367,13 @@ class QueueItemWidget(QFrame):
                                   Qt.TransformationMode.SmoothTransformation)
                 )
 
+        self._last_item = item
+
         # ── State Highlighting & Progress ──────────────────────────────────────
+        self.setStyleSheet(_get_card_style(item.status, self._is_dark))
+
         if item.status == QueueItemStatus.DOWNLOADING:
             # Highlight orange for active downloading
-            self.setStyleSheet(_STYLE_CARD_DOWNLOADING)
             self._status_label.setText("⬇ Downloading")
             self._status_label.setStyleSheet("color: #F59E0B; font-weight: bold;")
 
@@ -368,7 +405,6 @@ class QueueItemWidget(QFrame):
             self._remove_btn.hide()
         elif item.status in (QueueItemStatus.DONE, QueueItemStatus.WARNING):
             # Highlight green for downloaded
-            self.setStyleSheet(_STYLE_CARD_DONE)
             self._status_label.setText("✓ Done" if item.status == QueueItemStatus.DONE else "✓ Done (Warn)")
             self._status_label.setStyleSheet("color: #22C55E; font-weight: bold;")
 
@@ -389,15 +425,12 @@ class QueueItemWidget(QFrame):
             self._remove_btn.show()
         else:
             if item.status == QueueItemStatus.FAILED:
-                self.setStyleSheet(_STYLE_CARD_FAILED)
                 self._status_label.setText("✕ Failed")
                 self._status_label.setStyleSheet("color: #EF4444; font-weight: bold;")
             elif item.status == QueueItemStatus.PENDING:
-                self.setStyleSheet(_STYLE_CARD_DEFAULT)
                 self._status_label.setText("⏳ Pending")
                 self._status_label.setStyleSheet("color: #F7B731; font-weight: bold;")
             else:
-                self.setStyleSheet(_STYLE_CARD_DEFAULT)
                 color, icon = _STATUS_COLORS.get(item.status, ("#888", "?"))
                 self._status_label.setText(f"{icon} {item.status.value}")
                 self._status_label.setStyleSheet(f"color: {color}; font-weight: bold;")

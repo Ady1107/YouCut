@@ -15,6 +15,7 @@ from typing import Optional
 from PySide6.QtCore import Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -50,12 +51,35 @@ class HistoryItemWidget(QFrame):
         self.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
         self.setLineWidth(1)
         self.setMinimumHeight(64)
-        self.setStyleSheet(
-            "HistoryItemWidget { background-color: #171922; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 12px; }"
-            "HistoryItemWidget:hover { background-color: #1B1E2B; border: 1px solid rgba(255, 255, 255, 0.12); }"
-        )
+        app = QApplication.instance()
+        is_dark = (app.property("current_theme") != "light") if app else True
         self._setup_ui()
+        self.update_theme(is_dark)
         self.update_from_entry(entry)
+
+    def update_theme(self, is_dark: bool) -> None:
+        """Update history card styles for dark/light theme."""
+        bg = "#171922" if is_dark else "#FFFFFF"
+        border = "rgba(255, 255, 255, 0.07)" if is_dark else "#DCE0E8"
+        hover_bg = "#1B1E2B" if is_dark else "#F8F9FB"
+        hover_border = "rgba(255, 255, 255, 0.12)" if is_dark else "#CCD1DC"
+        title_col = "#F3F4F7" if is_dark else "#111318"
+        meta_col = "rgba(235, 235, 245, 0.45)" if is_dark else "#5A6170"
+
+        self.setStyleSheet(
+            f"HistoryItemWidget {{ background-color: {bg}; border: 1px solid {border}; border-radius: 12px; }}"
+            f"HistoryItemWidget:hover {{ background-color: {hover_bg}; border: 1px solid {hover_border}; }}"
+        )
+        if hasattr(self, "_title_label"):
+            self._title_label.setStyleSheet(f"color: {title_col};")
+        if hasattr(self, "_date_label"):
+            self._date_label.setStyleSheet(f"color: {meta_col};")
+        if hasattr(self, "_time_label"):
+            self._time_label.setStyleSheet(f"color: {meta_col};")
+        if hasattr(self, "_quality_label"):
+            self._quality_label.setStyleSheet(f"color: {meta_col};")
+        if hasattr(self, "_size_label"):
+            self._size_label.setStyleSheet(f"color: {meta_col};")
 
     def _setup_ui(self) -> None:
         """Set up the history item UI."""

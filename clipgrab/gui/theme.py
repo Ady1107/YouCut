@@ -296,6 +296,7 @@ def _generate_stylesheet(
     bg_card_alt: str,
     bg_tooltip: str,
     border_card: str,
+    border_card_subtle: str,
     border_input: str,
     border_input_focus: str,
     border_divider: str,
@@ -317,6 +318,11 @@ QMainWindow, QWidget#centralWidget {{
     color: {text_primary};
 }}
 
+QLabel {{
+    background-color: transparent;
+    border: none;
+}}
+
 /* ━━━ Tooltips ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
 QToolTip {{
     background-color: {bg_tooltip};
@@ -328,10 +334,43 @@ QToolTip {{
 }}
 
 /* ━━━ Card Container (QFrame.card) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
-QFrame.card, QFrame#cardContainer {{
+QFrame.card, QFrame#cardContainer,
+QFrame#previewCard, QFrame#trimCard, QFrame#qualityCard, QFrame#saveCard,
+QFrame#socialOptionsCard, QFrame#socialInfoCard, QFrame#emptyCard {{
     background-color: {bg_card};
     border: 1px solid {border_card};
     border-radius: {RADIUS_CARD}px;
+}}
+
+QFrame#startCard, QFrame#endCard, QFrame#fnBox, QFrame#stepsBox {{
+    background-color: {bg_card_alt};
+    border: 1px solid {border_card_subtle};
+    border-radius: {RADIUS_FIELD}px;
+}}
+
+QFrame#urlInputBox {{
+    background-color: {bg_input};
+    border: 1px solid {border_input};
+    border-radius: {RADIUS_FIELD}px;
+}}
+
+QGroupBox {{
+    border: 1px solid {border_card};
+    border-radius: {RADIUS_FIELD}px;
+    margin-top: 14px;
+    padding-top: 16px;
+    background-color: {bg_card};
+    color: {text_primary};
+    font-weight: 600;
+}}
+
+QGroupBox::title {{
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 14px;
+    padding: 0 6px;
+    color: {text_primary};
+    background-color: transparent;
 }}
 
 /* ━━━ Text Inputs ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
@@ -576,6 +615,7 @@ DARK_STYLESHEET = _generate_stylesheet(
     bg_card_alt=BG_CARD_ALT,
     bg_tooltip=BG_TOOLTIP,
     border_card=BORDER_CARD,
+    border_card_subtle=BORDER_CARD_SUBTLE,
     border_input=BORDER_INPUT,
     border_input_focus=BORDER_INPUT_FOCUS,
     border_divider=BORDER_DIVIDER,
@@ -597,6 +637,7 @@ LIGHT_STYLESHEET = _generate_stylesheet(
     bg_card_alt=BG_CARD_ALT_LIGHT,
     bg_tooltip=BG_TOOLTIP_LIGHT,
     border_card=BORDER_CARD_LIGHT,
+    border_card_subtle=BORDER_CARD_SUBTLE_LIGHT,
     border_input=BORDER_INPUT_LIGHT,
     border_input_focus=BORDER_INPUT_FOCUS_LIGHT,
     border_divider=BORDER_DIVIDER_LIGHT,
