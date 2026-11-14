@@ -1135,6 +1135,7 @@ class SocialDownloadPage(QWidget):
             platform_id=self._platform_id,
             cookies_file_path=getattr(self._settings, "cookies_file_path", None),
             browser_for_cookies=getattr(self._settings, "browser_for_cookies", None),
+            concurrent_fragments=getattr(self._settings, "concurrent_fragments", 16) if self._settings else 16,
         )
 
         logger.info("[%s] Download requested: '%s' -> %s", self._platform_name.upper(), filename, output_dir)

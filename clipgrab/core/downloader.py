@@ -215,7 +215,9 @@ class DownloadWorker(QObject):
             ytdlp_path,
             "-J",
             "--ignore-errors",
+            "--force-ipv4",
             "--socket-timeout", "20",
+            "--retries", "5",
             "--extractor-retries", "3",
         ]
         cmd.extend(get_js_runtime_args())
@@ -336,7 +338,9 @@ class DownloadWorker(QObject):
                 ytdlp_path,
                 "-J",
                 "--ignore-errors",
+                "--force-ipv4",
                 "--socket-timeout", "15",
+                "--retries", "5",
                 "--extractor-retries", "2",
             ]
             if platform_id in ("youtube",):
@@ -710,6 +714,14 @@ class DownloadWorker(QObject):
         safe_filename = sanitize_filename(request.filename)
         output_template = os.path.join(request.output_dir, f"{safe_filename}.%(ext)s")
 
+        cf = getattr(request, "concurrent_fragments", None)
+        if not cf:
+            try:
+                from clipgrab.config.settings import AppSettings
+                cf = AppSettings.load().concurrent_fragments
+            except Exception:
+                cf = 16
+
         cmd = [
             ytdlp_path,
             "--ffmpeg-location", get_ffmpeg_directory(),
@@ -719,8 +731,15 @@ class DownloadWorker(QObject):
             "--progress-template", "%(progress)j",
             "--no-mtime",
             "--continue",
+            "--force-ipv4",
             "--socket-timeout", "20",
-            "--concurrent-fragments", str(getattr(request, "concurrent_fragments", 16)),
+            "--retries", "10",
+            "--fragment-retries", "10",
+            "--file-access-retries", "3",
+            "--buffer-size", "1024K",
+            "--http-chunk-size", "10M",
+            "--concurrent-fragments", str(cf),
+            "--downloader-args", "ffmpeg_i:-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
         ]
         cmd.extend(get_js_runtime_args())
 
@@ -850,26 +869,66 @@ class DownloadWorker(QObject):
 
 def _classify_error(stderr: str, is_extraction: bool) -> str:
     stderr_lower = stderr.lower()
+
+    # 1. Browser Cookie DB lock (specific to --cookies-from-browser when browser is running)
     if any(k in stderr_lower for k in ("could not copy", "cookie database", "cookie lock")):
         return (
             "Your browser (e.g. Chrome) has locked its cookie database because it is currently running. "
             "Please close your browser, or select 'None' for browser cookies in Settings > Cookies & Authentication."
         )
+
+    # 2. Network & Connection Timeouts / Drops (Must check BEFORE content restrictions!)
+    if any(k in stderr_lower for k in (
+        "error number -138",
+        "timed out",
+        "connect timeout",
+        "connection timed out",
+        "fragment 1 not found",
+        "unable to download video data",
+        "connection refused",
+        "connection reset",
+        "network is unreachable",
+        "name resolution",
+        "urlopen error",
+        "temporary failure in name resolution",
+        "failed to connect",
+    )):
+        return (
+            "Connection to the media server timed out or failed. "
+            "Please check your internet connection and retry."
+        )
+
+    # 3. Bot verification / Captcha check
+    if "bot" in stderr_lower and any(w in stderr_lower for w in ("sign in", "confirm", "robot", "captcha", "checkpoint")):
+        return (
+            "YouTube requested bot verification (sign in to confirm you're not a bot). "
+            "To resolve this, select your browser in Settings > Cookies & Authentication or try again in a few minutes."
+        )
+
+    # 4. Age restriction (Strict word boundaries to never match words like 'webpage', 'percentage', 'message', etc.)
+    if re.search(r"\b(age[- ]restricted|confirm your age|inappropriate for some users|sign in to confirm your age)\b", stderr_lower):
+        return (
+            "This video is age-restricted. "
+            "To download it, select your browser in Settings > Cookies & Authentication, "
+            "or provide an authorized cookies.txt file."
+        )
+
+    # 5. Private / Sign-in required
+    if any(k in stderr_lower for k in ("private video", "this video is private", "sign in to view this video")):
+        return "This video is private. You need the owner's permission to access it."
+
+    if any(k in stderr_lower for k in ("members-only", "join this channel")):
+        return "This video is available to channel members only."
+
     if any(k in stderr_lower for k in ("registered users", "login", "log in", "checkpoint", "not granting access", "empty media response", "authentication")):
         return (
             "This post is private or restricted by Facebook/Instagram. "
             "To access it, select your browser in Settings > Cookies & Authentication, "
             "or provide an authorized cookies.txt file."
         )
-    if "private video" in stderr_lower:
-        return "This video is private. You need the owner's permission to access it."
-    if "sign in" in stderr_lower or "age" in stderr_lower:
-        return (
-            "This video is age-restricted or requires sign in. "
-            "To download it, select your browser in Settings > Cookies & Authentication, "
-            "or provide an authorized cookies.txt file."
-        )
-    if "unavailable" in stderr_lower or "removed" in stderr_lower:
+
+    # 6. Content status & availability
+    if "unavailable" in stderr_lower or "removed" in stderr_lower or "video has been deleted" in stderr_lower:
         return "This media is unavailable. It may have been removed or made private."
     if "copyright" in stderr_lower:
         return "This media is unavailable due to a copyright claim."
@@ -879,12 +938,8 @@ def _classify_error(stderr: str, is_extraction: bool) -> str:
         return "This video is a scheduled premiere and is not yet available for download."
     if "live" in stderr_lower and ("not started" in stderr_lower or "offline" in stderr_lower):
         return "This live stream has not started yet or is no longer available."
-    if "urlopen error" in stderr_lower or "connection" in stderr_lower or "network" in stderr_lower:
-        return "No internet connection. Please check your network and try again."
-    if "timed out" in stderr_lower or "timeout" in stderr_lower:
-        return "The request timed out while connecting to the media server. Please check your internet connection and click Retry Fetch."
-    if "ffmpeg" in stderr_lower and ("not found" in stderr_lower or "error" in stderr_lower):
-        return "FFmpeg error during video processing. The bundled FFmpeg may be corrupted or missing."
+
+    # 7. Formats & Encoding
     if "no video formats" in stderr_lower:
         if is_extraction:
             return (
@@ -901,15 +956,20 @@ def _classify_error(stderr: str, is_extraction: bool) -> str:
             )
         return "The selected format is not available. Try selecting a different quality."
 
+    # 8. FFmpeg binary errors
+    if "ffmpeg" in stderr_lower and ("not found" in stderr_lower or "cannot find" in stderr_lower or "does not exist" in stderr_lower):
+        return "FFmpeg error during video processing. The bundled FFmpeg may be corrupted or missing."
+
+    # 9. Fallback
     if is_extraction:
         return (
-            f"Failed to extract video information.\\n\\n"
-            f"This might be caused by a YouTube change. Try updating yt-dlp.\\n\\n"
+            f"Failed to extract video information.\n\n"
+            f"This might be caused by a platform change. Try updating yt-dlp.\n\n"
             f"Details: {stderr[:300]}"
         )
 
     if stderr:
-        return f"Download failed:\\n{stderr[:500]}"
+        return f"Download failed:\n{stderr[:500]}"
     return "Download failed with an unknown error."
 
 
