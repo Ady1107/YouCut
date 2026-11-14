@@ -88,6 +88,7 @@ class DownloadWorker(QObject):
     def __init__(self, parent: Optional[QObject] = None):
         super().__init__(parent)
         self.fetch_url: str = ""
+        self.fetch_platform_id: str = "youtube"  # set before starting thread
         self.download_request: Optional[DownloadRequest] = None
         
         self._process: Optional[QProcess] = None
@@ -105,7 +106,7 @@ class DownloadWorker(QObject):
 
     def execute_fetch(self) -> None:
         if self.fetch_url:
-            self.fetch_info(self.fetch_url)
+            self.fetch_info(self.fetch_url, platform_id=self.fetch_platform_id)
 
     def execute_download(self) -> None:
         if self.download_request:
@@ -167,16 +168,28 @@ class DownloadWorker(QObject):
     def is_cancel_requested(self) -> bool:
         return self._cancel_requested
 
-    def fetch_info(self, url: str) -> None:
+    def fetch_info(self, url: str, platform_id: str = "youtube") -> None:
+        """
+        Fetch video/media info via yt-dlp -J.
+
+        Args:
+            url: The media URL to fetch.
+            platform_id: The platform ID from PlatformConfig.id.
+                YouTube keeps --no-playlist so playlist URLs aren't auto-expanded.
+                Non-YouTube platforms (Instagram carousels, etc.) omit it so that
+                multi-item posts return their full entries list.
+        """
         self._cancel_requested = False
         ytdlp_path = get_ytdlp_path()
-        cmd = [
-            ytdlp_path,
-            "-J",
-            "--no-playlist",
-            "--ffmpeg-location", get_ffmpeg_directory(),
-            url,
-        ]
+        cmd = [ytdlp_path, "-J"]
+
+        # --no-playlist: only needed for YouTube to prevent playlist expansion.
+        # Instagram carousels ARE represented as a "playlist" in yt-dlp, so we
+        # must NOT pass --no-playlist for non-YouTube yt-dlp platforms.
+        if platform_id in ("youtube",):
+            cmd.append("--no-playlist")
+
+        cmd += ["--ffmpeg-location", get_ffmpeg_directory(), url]
 
         try:
             import subprocess
