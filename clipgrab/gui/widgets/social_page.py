@@ -242,7 +242,7 @@ class SocialDownloadPage(QWidget):
         self._fetch_worker: Optional[DownloadWorker] = None
         self._watchdog_timer = QTimer(self)
         self._watchdog_timer.setSingleShot(True)
-        self._watchdog_timer.setInterval(60000)
+        self._watchdog_timer.setInterval(90000)  # 90s timeout
         self._watchdog_timer.timeout.connect(self._on_fetch_timeout)
 
         # Platform-specific tokens
@@ -1060,9 +1060,9 @@ class SocialDownloadPage(QWidget):
         logger.info("[%s] Fetch worker thread started for url: %s", self._platform_name.upper(), url)
 
     def _on_fetch_timeout(self) -> None:
-        logger.error("[%s] Fetch timed out after 60 seconds", self._platform_name.upper())
+        logger.error("[%s] Fetch timed out after 90 seconds", self._platform_name.upper())
         self._shutdown_fetch_worker()
-        self.set_error_state("Fetch request timed out after 60 seconds. Please check your network connection and retry.")
+        self.set_error_state("Fetch request timed out. Please check your network connection and click Retry Fetch.")
         self.status_message.emit("Fetch timed out.")
 
     @Slot(object)

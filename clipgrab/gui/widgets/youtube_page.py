@@ -891,7 +891,7 @@ class YouTubePage(QWidget):
         self._fetch_worker: Optional[DownloadWorker] = None
         self._watchdog_timer = QTimer(self)
         self._watchdog_timer.setSingleShot(True)
-        self._watchdog_timer.setInterval(60000)  # 60s timeout
+        self._watchdog_timer.setInterval(90000)  # 90s timeout
         self._watchdog_timer.timeout.connect(self._on_fetch_timeout)
 
         # Responsive state tracking
@@ -2932,9 +2932,9 @@ class YouTubePage(QWidget):
         self._fetch_thread.start()
 
     def _on_fetch_timeout(self) -> None:
-        logger.error("[FETCH] Fetch timed out after 60 seconds")
+        logger.error("[FETCH] Fetch timed out after 90 seconds")
         self._shutdown_fetch_worker()
-        self.set_error_state("Fetch timed out after 60 seconds. Please check your network connection and retry.")
+        self.set_error_state("Fetch request timed out. Please check your network connection and click Retry Fetch.")
 
     def is_fetching(self) -> bool:
         return self._fetch_thread is not None and self._fetch_thread.isRunning()

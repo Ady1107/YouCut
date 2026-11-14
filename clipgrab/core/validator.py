@@ -29,6 +29,7 @@ def clean_media_url(url: str) -> str:
         drop_params = {
             "utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term",
             "igsh", "igshid", "fbclid", "mibextid", "sh", "ref", "ref_src",
+            "feature", "si", "pp",
         }
         q_pairs = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) if k.lower() not in drop_params]
         new_query = "&".join(f"{k}={v}" if v else k for k, v in q_pairs)

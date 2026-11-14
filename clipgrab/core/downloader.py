@@ -26,6 +26,19 @@ def get_last_executed_command() -> str:
     return " ".join(_last_executed_command)
 
 
+def get_js_runtime_args() -> list[str]:
+    """
+    Detect available JavaScript runtimes (node, deno, bun, quickjs) for yt-dlp.
+    Recent yt-dlp releases require a JS runtime to solve YouTube's n-sig / JS challenges.
+    Node is installed on standard systems but disabled by default in yt-dlp unless passed explicitly.
+    """
+    import shutil
+    for runtime in ("node", "deno", "bun", "quickjs"):
+        if shutil.which(runtime):
+            return ["--js-runtimes", runtime]
+    return []
+
+
 class DownloadRequest:
     def __init__(
         self,
@@ -198,7 +211,14 @@ class DownloadWorker(QObject):
         self._cancel_requested = False
         url = clean_media_url(url)
         ytdlp_path = get_ytdlp_path()
-        cmd = [ytdlp_path, "-J", "--ignore-errors"]
+        cmd = [
+            ytdlp_path,
+            "-J",
+            "--ignore-errors",
+            "--socket-timeout", "20",
+            "--extractor-retries", "3",
+        ]
+        cmd.extend(get_js_runtime_args())
 
         # --no-playlist: only needed for YouTube to prevent playlist expansion.
         # Instagram carousels ARE represented as a "playlist" in yt-dlp, so we
@@ -225,6 +245,7 @@ class DownloadWorker(QObject):
             import subprocess
             self._fetch_process = subprocess.Popen(
                 cmd,
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -266,6 +287,7 @@ class DownloadWorker(QObject):
                     try:
                         retry_proc = subprocess.Popen(
                             cmd_no_cookies,
+                            stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE,
                             text=True,
@@ -275,7 +297,7 @@ class DownloadWorker(QObject):
                         )
                         self._fetch_process = retry_proc
                         self._process_pid = retry_proc.pid
-                        stdout_retry, stderr_retry = retry_proc.communicate(timeout=60)
+                        stdout_retry, stderr_retry = retry_proc.communicate(timeout=45)
                         if retry_proc.returncode == 0 and stdout_retry.strip():
                             info_dict = json.loads(stdout_retry.strip())
                             video_info = parse_video_info(info_dict)
@@ -300,6 +322,55 @@ class DownloadWorker(QObject):
             info_dict = json.loads(stdout)
             video_info = parse_video_info(info_dict)
             self.info_fetched.emit(video_info)
+
+        except subprocess.TimeoutExpired:
+            if self._cancel_requested:
+                logger.info("fetch_info cancelled during timeout.")
+                return
+            logger.warning("Primary fetch timed out for URL '%s'. Attempting fallback retry with android/web client...", url)
+            if self._process_pid > 0:
+                kill_process_tree(self._process_pid)
+
+            # Fast fallback attempt with android client
+            fallback_cmd = [
+                ytdlp_path,
+                "-J",
+                "--ignore-errors",
+                "--socket-timeout", "15",
+                "--extractor-retries", "2",
+            ]
+            if platform_id in ("youtube",):
+                fallback_cmd.extend(["--no-playlist", "--extractor-args", "youtube:player_client=android,web"])
+            fallback_cmd.extend(get_js_runtime_args())
+            fallback_cmd += ["--ffmpeg-location", get_ffmpeg_directory(), url]
+
+            try:
+                import subprocess
+                retry_proc = subprocess.Popen(
+                    fallback_cmd,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    creationflags=_CREATION_FLAGS,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                self._fetch_process = retry_proc
+                self._process_pid = retry_proc.pid
+                stdout_retry, stderr_retry = retry_proc.communicate(timeout=25)
+                if retry_proc.returncode == 0 and stdout_retry.strip():
+                    info_dict = json.loads(stdout_retry.strip())
+                    video_info = parse_video_info(info_dict)
+                    self.info_fetched.emit(video_info)
+                    return
+            except Exception as fb_err:
+                logger.error("Fallback fetch retry failed: %s", fb_err)
+
+            self.info_fetch_failed.emit(
+                "Fetching video details timed out. The connection was slow or YouTube temporarily throttled requests. Please click 'Retry Fetch'.",
+                False,
+            )
 
         except Exception as e:
             if self._cancel_requested:
@@ -648,8 +719,10 @@ class DownloadWorker(QObject):
             "--progress-template", "%(progress)j",
             "--no-mtime",
             "--continue",
+            "--socket-timeout", "20",
             "--concurrent-fragments", str(getattr(request, "concurrent_fragments", 16)),
         ]
+        cmd.extend(get_js_runtime_args())
 
         if getattr(request, "platform_id", "youtube") in ("youtube",):
             cmd.append("--no-playlist")
@@ -808,6 +881,8 @@ def _classify_error(stderr: str, is_extraction: bool) -> str:
         return "This live stream has not started yet or is no longer available."
     if "urlopen error" in stderr_lower or "connection" in stderr_lower or "network" in stderr_lower:
         return "No internet connection. Please check your network and try again."
+    if "timed out" in stderr_lower or "timeout" in stderr_lower:
+        return "The request timed out while connecting to the media server. Please check your internet connection and click Retry Fetch."
     if "ffmpeg" in stderr_lower and ("not found" in stderr_lower or "error" in stderr_lower):
         return "FFmpeg error during video processing. The bundled FFmpeg may be corrupted or missing."
     if "no video formats" in stderr_lower:
