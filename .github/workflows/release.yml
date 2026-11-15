@@ -1,9 +1,6 @@
 name: Release YouCut
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       tag_name:

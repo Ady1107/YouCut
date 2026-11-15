@@ -10,7 +10,7 @@ APP_NAME = "YouCut"
 APP_AUTHOR = "sHUBH"
 
 # Current application version
-APP_VERSION = "1.0.0"
+APP_VERSION = "2.0.0"
 
 # GitHub repository coordinates for live release checking
 GITHUB_REPO_OWNER = "Ady1107"
