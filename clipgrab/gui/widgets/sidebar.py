@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPaintEvent, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
@@ -71,6 +71,7 @@ class SidebarNavButton(QPushButton):
         self._icon_name = icon_name
         self._is_active = False
         self._is_collapsed = False
+        self._show_dot = False
 
         self.setText(f"  {title}")
         self.setFont(get_font(point_size=10, weight=QFont.Weight.Medium))
@@ -97,6 +98,30 @@ class SidebarNavButton(QPushButton):
 
     def is_active(self) -> bool:
         return self._is_active
+
+    def set_show_dot(self, show: bool) -> None:
+        """Show or hide the red update indicator dot overlay."""
+        show_b = bool(show)
+        if self._show_dot != show_b:
+            self._show_dot = show_b
+            self.update()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        super().paintEvent(event)
+        if self._show_dot:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setBrush(QColor(COLOR_ACCENT))
+            painter.setPen(Qt.PenStyle.NoPen)
+            dot_radius = 3.5  # 7px diameter
+            if self._is_collapsed:
+                cx = self.width() / 2 + 8
+                cy = self.height() / 2 - 8
+                painter.drawEllipse(QPointF(cx, cy), dot_radius, dot_radius)
+            else:
+                cx = self.width() - 14 - dot_radius
+                cy = self.height() / 2
+                painter.drawEllipse(QPointF(cx, cy), dot_radius, dot_radius)
 
     def _update_appearance(self) -> None:
         align = "center" if self._is_collapsed else "left"
@@ -336,22 +361,10 @@ class Sidebar(QWidget):
         layout.addWidget(hist_btn)
 
         # Settings
-        set_container = QWidget()
-        set_layout = QHBoxLayout(set_container)
-        set_layout.setContentsMargins(0, 0, 0, 0)
-        set_layout.setSpacing(0)
-
         set_btn = SidebarNavButton("settings", "Settings", "settings")
         set_btn.clicked.connect(lambda: self.select_page("settings"))
         self._nav_buttons["settings"] = set_btn
-        set_layout.addWidget(set_btn)
-
-        self._settings_dot = QLabel("●")
-        self._settings_dot.setFont(get_font(point_size=8, weight=QFont.Weight.Bold))
-        self._settings_dot.setStyleSheet(f"color: {COLOR_ACCENT}; background: transparent; border: none; padding-right: 8px;")
-        self._settings_dot.hide()
-        set_layout.addWidget(self._settings_dot)
-        layout.addWidget(set_container)
+        layout.addWidget(set_btn)
 
         # ── 7. Flexible Spacer ───────────────────────────────────────────────
         layout.addStretch(1)
@@ -409,8 +422,8 @@ class Sidebar(QWidget):
 
     def set_settings_badge(self, has_update: bool) -> None:
         """Show or hide the red update indicator dot on Settings button."""
-        if hasattr(self, "_settings_dot"):
-            self._settings_dot.setVisible(bool(has_update))
+        if "settings" in self._nav_buttons:
+            self._nav_buttons["settings"].set_show_dot(bool(has_update))
 
     def set_status(self, text: str, state: str = "ready") -> None:
         """Update bottom-left status pill."""

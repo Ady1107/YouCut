@@ -29,6 +29,7 @@ from PySide6.QtGui import (
     QColor,
     QDesktopServices,
     QFont,
+    QFontMetrics,
     QIcon,
     QMouseEvent,
     QPainter,
@@ -157,15 +158,46 @@ class QToggleSwitch(QWidget):
         painter.drawEllipse(thumb_rect)
 
 
+class ElidedLabel(QLabel):
+    """
+    QLabel that elides text on the right if it exceeds available width,
+    while setting the full text as its tooltip.
+    """
+
+    def __init__(self, text: str = "", parent: Optional[QWidget] = None) -> None:
+        super().__init__(text, parent)
+        self._full_text = text
+        self.setToolTip(text)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+
+    def setText(self, text: str) -> None:
+        self._full_text = str(text)
+        self.setToolTip(self._full_text)
+        super().setText(self._full_text)
+
+    def text(self) -> str:
+        return self._full_text
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        metrics = painter.fontMetrics()
+        elided = metrics.elidedText(self._full_text, Qt.TextElideMode.ElideRight, self.width())
+        painter.setPen(self.palette().color(self.foregroundRole()))
+        painter.setFont(self.font())
+        painter.drawText(self.rect(), self.alignment(), elided)
+
+
 class StatusBadge(QFrame):
     """
     Status badge pill with a 6px status dot and label.
     Supports states: "up_to_date", "updating", "available", "checking", "error".
+    Fixed size policy to prevent elision or truncation.
     """
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setFixedHeight(24)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self._layout = QHBoxLayout(self)
         self._layout.setContentsMargins(8, 2, 8, 2)
         self._layout.setSpacing(6)
@@ -186,7 +218,7 @@ class StatusBadge(QFrame):
             text_color = "#3DDC97"
             bg_color = "rgba(61, 220, 151, 0.12)"
             label = custom_text or "Up to date"
-        elif kind == "updating":
+        elif kind in ("updating", "downloading", "installing"):
             dot_color = "#F59E0B"
             text_color = "#F59E0B"
             bg_color = "rgba(245, 158, 11, 0.12)"
@@ -213,6 +245,9 @@ class StatusBadge(QFrame):
         self.setStyleSheet(
             f"QFrame {{ background-color: {bg_color}; border-radius: 12px; border: none; }}"
         )
+        fm = QFontMetrics(self._text.font())
+        calc_w = 8 + 10 + 6 + fm.horizontalAdvance(label) + 12
+        self.setFixedWidth(max(calc_w, 92))
 
 
 class SlimProgressBar(QWidget):
@@ -543,15 +578,13 @@ class ComponentUpdateCard(QFrame):
         self._name_label.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
         name_col.addWidget(self._name_label)
 
-        self._version_label = QLabel(initial_version)
+        self._version_label = ElidedLabel(initial_version)
         self._version_label.setFont(QFont("Segoe UI", 9))
         name_col.addWidget(self._version_label)
-        top_row.addLayout(name_col)
-
-        top_row.addStretch()
+        top_row.addLayout(name_col, 1)
 
         self._badge = StatusBadge()
-        top_row.addWidget(self._badge, alignment=Qt.AlignmentFlag.AlignTop)
+        top_row.addWidget(self._badge, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
         layout.addLayout(top_row)
 
         # ── Status info & progress row ────────────────────────────────────────
@@ -650,7 +683,7 @@ class ComponentUpdateCard(QFrame):
 
     def set_whats_new_url(self, url: str) -> None:
         self._whats_new_url = url
-        if url:
+        if url and self._current_state == "available":
             self._whats_new_btn.show()
         else:
             self._whats_new_btn.hide()
@@ -665,32 +698,45 @@ class ComponentUpdateCard(QFrame):
         if state == "up_to_date":
             self._progress_bar.hide()
             self._progress_label.hide()
+            self._whats_new_btn.hide()
             self._status_text.setText(custom_info or "✓ You're on the latest version.")
             self._action_btn.setText("🔄 Check for updates")
+            self._action_btn.setEnabled(True)
             self._set_button_style("secondary")
         elif state == "available":
             self._progress_bar.hide()
             self._progress_label.hide()
+            if self._whats_new_url:
+                self._whats_new_btn.show()
+            else:
+                self._whats_new_btn.hide()
             self._status_text.setText(custom_info or "New build available")
             self._action_btn.setText("⬇ Update now")
+            self._action_btn.setEnabled(True)
             self._set_button_style("primary")
-        elif state == "updating":
+        elif state in ("updating", "downloading", "installing"):
             self._progress_bar.show()
             self._progress_label.show()
+            self._whats_new_btn.hide()
             self._status_text.setText(custom_info or "Updating component...")
             self._action_btn.setText("✕ Cancel update")
+            self._action_btn.setEnabled(True)
             self._set_button_style("secondary")
         elif state == "error":
             self._progress_bar.hide()
             self._progress_label.hide()
+            self._whats_new_btn.hide()
             self._status_text.setText(custom_info or "Couldn't reach update server.")
             self._action_btn.setText("🔄 Retry check")
+            self._action_btn.setEnabled(True)
             self._set_button_style("secondary")
         else:  # "checking"
             self._progress_bar.hide()
             self._progress_label.hide()
+            self._whats_new_btn.hide()
             self._status_text.setText("Checking for updates...")
             self._action_btn.setText("⏳ Checking...")
+            self._action_btn.setEnabled(False)
             self._set_button_style("secondary")
 
     def _set_button_style(self, kind: str) -> None:
@@ -1432,7 +1478,7 @@ class SettingsPanel(QWidget):
     def _on_check_all_clicked(self) -> None:
         self._check_all_btn.setEnabled(False)
         self._check_all_btn.setText("⏳ Checking...")
-        self._update_manager.check_all(force=True)
+        self._update_manager.check_all(force=True, is_manual=True)
 
     def _on_youcut_action(self, action: str) -> None:
         if action == "update":
@@ -1453,7 +1499,7 @@ class SettingsPanel(QWidget):
             self._update_manager.cancel_ytdlp_update()
         else:
             self._card_ytdlp.set_state("checking")
-            self._update_manager.check_ytdlp(force=True)
+            self._update_manager.check_ytdlp(force=True, is_manual=True)
 
     def _on_ffmpeg_action(self, action: str) -> None:
         if action == "update":
@@ -1463,7 +1509,7 @@ class SettingsPanel(QWidget):
             self._update_manager.cancel_ffmpeg_update()
         else:
             self._card_ffmpeg.set_state("checking")
-            self._update_manager.check_ffmpeg(force=True)
+            self._update_manager.check_ffmpeg(force=True, is_manual=True)
 
     # ── Manager Signal Listeners ──────────────────────────────────────────────
 
@@ -1476,7 +1522,8 @@ class SettingsPanel(QWidget):
         elif status == "up_to_date":
             self._card_youcut.set_state("up_to_date", "✓ You're on the latest version.")
         elif status == "error":
-            self._card_youcut.set_state("error", "Couldn't reach GitHub Releases.")
+            err_msg = notes if notes else "Couldn't reach GitHub Releases."
+            self._card_youcut.set_state("error", err_msg)
         else:
             self._card_youcut.set_state("checking")
 
@@ -1490,7 +1537,8 @@ class SettingsPanel(QWidget):
         elif status == "updating":
             self._card_ytdlp.set_state("updating", "Downloading update...")
         elif status == "error":
-            self._card_ytdlp.set_state("error", "Couldn't check PyPI.")
+            err_msg = latest_ver if latest_ver and latest_ver != current_ver else "Couldn't check PyPI."
+            self._card_ytdlp.set_state("error", err_msg)
         else:
             self._card_ytdlp.set_state("checking")
 
@@ -1498,8 +1546,8 @@ class SettingsPanel(QWidget):
         self._card_ytdlp.set_progress(percent, speed)
 
     def _on_manager_ffmpeg_status(self, status: str, current_ver: str, latest_ver: str, size: str, rel_url: str) -> None:
-        disp = current_ver if len(current_ver) < 22 else current_ver[:20] + ".."
-        self._card_ffmpeg.set_version(disp)
+        v_title = current_ver if current_ver.startswith("Version") else f"Version {current_ver}"
+        self._card_ffmpeg.set_version(v_title)
         self._lbl_v_ffmpeg_val.setText(current_ver)
         if rel_url:
             self._card_ffmpeg.set_whats_new_url(rel_url)
@@ -1512,7 +1560,8 @@ class SettingsPanel(QWidget):
         elif status == "updating":
             self._card_ffmpeg.set_state("updating", "Downloading build...")
         elif status == "error":
-            self._card_ffmpeg.set_state("error", "Couldn't check GitHub.")
+            err_msg = latest_ver if latest_ver else "Couldn't check GitHub."
+            self._card_ffmpeg.set_state("error", err_msg)
         else:
             self._card_ffmpeg.set_state("checking")
 

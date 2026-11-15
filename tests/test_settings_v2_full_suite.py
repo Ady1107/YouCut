@@ -22,7 +22,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QSizePolicy
 
 from clipgrab.config.settings import AppSettings
 from clipgrab.core.ffmpeg_utils import (
@@ -35,10 +35,15 @@ from clipgrab.core.updater import (
     COOLDOWN_YOUCUT_SECONDS,
     COOLDOWN_YTDLP_SECONDS,
     RETRY_FAILED_NETWORK_SECONDS,
+    ComponentState,
     UpdateManager,
     _is_newer,
+    check_ffmpeg_update,
     get_installed_ffmpeg_version,
     get_installed_ytdlp_version,
+    is_ffmpeg_update_newer,
+    parse_ffmpeg_installed_version,
+    parse_ffmpeg_remote_version,
 )
 from clipgrab.gui.main_window import MainWindow
 from clipgrab.gui.theme import (
@@ -50,6 +55,7 @@ from clipgrab.gui.theme import (
 )
 from clipgrab.gui.widgets.settings_panel import (
     ComponentUpdateCard,
+    ElidedLabel,
     FragmentStepper,
     QToggleSwitch,
     SettingsPanel,
@@ -57,6 +63,7 @@ from clipgrab.gui.widgets.settings_panel import (
     StepperButton,
     ThemePreviewCard,
 )
+from clipgrab.gui.widgets.sidebar import Sidebar, SidebarNavButton
 from clipgrab.version import APP_VERSION
 
 
@@ -382,6 +389,154 @@ class TestFullSuite(unittest.TestCase):
         self.assertTrue(old_str.startswith("Last checked "))
         self.assertNotIn("today", old_str)
         self.assertNotIn("yesterday", old_str)
+
+    # ── PART 5: FFmpeg Updater, State Machine, Single-Flight & Sidebar ──────
+
+    def test_part5_ffmpeg_version_never_returns_latest_and_compares_correctly(self) -> None:
+        """Verify remote FFmpeg parsing never returns 'latest' and compares commits/dates accurately."""
+        # 1. Release with tag 'latest', published_at date
+        mock_data = {
+            "name": "Latest Auto-Build (2026-11-14 12:37)",
+            "tag_name": "latest",
+            "published_at": "2026-11-14T12:56:33Z",
+            "body": "Built from git commit N-127600",
+        }
+        commit, date_str, display = parse_ffmpeg_remote_version(mock_data, "ffmpeg-master-latest-win64-gpl.zip")
+        self.assertNotEqual(display, "latest")
+        self.assertNotIn("latest", display.lower())
+        self.assertEqual(commit, 127600)
+        self.assertEqual(date_str, "2026-11-14")
+
+        # 2. Installed version parse
+        inst_commit, inst_date = parse_ffmpeg_installed_version("N-127579-g5cb9fcd211-20261016")
+        self.assertEqual(inst_commit, 127579)
+        self.assertEqual(inst_date, "2026-10-16")
+
+        # 3. Newer check
+        self.assertTrue(is_ffmpeg_update_newer(commit, date_str, inst_commit, inst_date))
+
+        # 4. Older commit check
+        self.assertFalse(is_ffmpeg_update_newer(127570, "2026-10-01", inst_commit, inst_date))
+
+        # 5. Tag with literal 'latest' and no commit/date returns False
+        self.assertFalse(is_ffmpeg_update_newer(None, None, inst_commit, inst_date))
+
+    def test_part5_ffmpeg_asset_selector_excludes_shared_builds(self) -> None:
+        """Verify check_ffmpeg_update selects static win64-gpl build and rejects shared build."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "tag_name": "latest",
+            "name": "Latest Auto-Build (2026-11-14 12:37)",
+            "published_at": "2026-11-14T12:56:33Z",
+            "assets": [
+                {
+                    "name": "ffmpeg-master-latest-win64-gpl-shared.zip",
+                    "size": 87 * 1024 * 1024,
+                    "browser_download_url": "https://example.com/shared.zip",
+                },
+                {
+                    "name": "ffmpeg-master-latest-win64-gpl.zip",
+                    "size": 201 * 1024 * 1024,
+                    "browser_download_url": "https://example.com/static.zip",
+                },
+            ],
+        }
+
+        with patch("requests.get", return_value=mock_resp), \
+             patch("clipgrab.core.updater.get_installed_ffmpeg_version", return_value="N-127579-g5cb9fcd211-20261016"):
+            result = check_ffmpeg_update()
+            self.assertIsNotNone(result)
+            self.assertEqual(result["download_url"], "https://example.com/static.zip")
+            self.assertEqual(result["size_str"], "≈ 201 MB")
+            self.assertNotEqual(result["latest_version"], "latest")
+
+    def test_part5_manual_check_never_auto_installs_even_if_toggle_on(self) -> None:
+        """Verify manual check never initiates download or installation even with toggle ON."""
+        mgr = self.update_manager
+        mgr._auto_update_ffmpeg = True
+        self.assertTrue(mgr.auto_update_ffmpeg)
+
+        with patch.object(mgr, "update_ffmpeg") as mock_install:
+            # Manual check completion
+            mgr._ffmpeg_check_is_manual = True
+            mgr._on_ffmpeg_check_completed(
+                "N-127579", "2026-11-14", True, "https://example.com/static.zip", "≈ 201 MB", "https://example.com/notes"
+            )
+            # Must NOT auto-install!
+            mock_install.assert_not_called()
+
+            # Card state must be available
+            st = mgr.get_component_state("ffmpeg")
+            self.assertEqual(st.status, "available")
+
+    def test_part5_24h_failure_backoff_suppresses_auto_install(self) -> None:
+        """Verify that after an update fails, auto-install for that version is suppressed for 24h."""
+        mgr = self.update_manager
+        mgr._auto_update_ffmpeg = True
+
+        # Simulate update failure on 2026-11-14
+        mgr._on_ffmpeg_failed("New FFmpeg failed its self-test")
+        c = mgr._get_cache("ffmpeg")
+        c["failed_version"] = "2026-11-14"
+        c["failed_at"] = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        c["last_failure_reason"] = "New FFmpeg failed its self-test"
+
+        with patch.object(mgr, "update_ffmpeg") as mock_install:
+            # Background check finds same version
+            mgr._ffmpeg_check_is_manual = False
+            mgr._on_ffmpeg_check_completed(
+                "N-127579", "2026-11-14", True, "https://example.com/static.zip", "≈ 201 MB", ""
+            )
+            # Auto-install suppressed!
+            mock_install.assert_not_called()
+            st = mgr.get_component_state("ffmpeg")
+            self.assertEqual(st.status, "error")
+            self.assertEqual(st.error_message, "New FFmpeg failed its self-test")
+
+    def test_part5_cancel_update_returns_to_available(self) -> None:
+        """Verify canceling an update returns state to 'available' with 'Update now' button."""
+        mgr = self.update_manager
+        c = mgr._get_cache("ffmpeg")
+        c["latest_version"] = "2026-11-14"
+        c["size"] = "≈ 201 MB"
+
+        mgr.cancel_ffmpeg_update()
+        st = mgr.get_component_state("ffmpeg")
+        self.assertEqual(st.status, "available")
+        self.assertEqual(st.latest_version, "2026-11-14")
+
+    def test_part5_sidebar_dot_overlay_and_pill_geometry(self) -> None:
+        """Verify sidebar Settings button has overlay dot inside pill and matches layout geometry."""
+        sidebar = Sidebar(last_section="home")
+        set_btn = sidebar._nav_buttons.get("settings")
+        hist_btn = sidebar._nav_buttons.get("history")
+        self.assertIsNotNone(set_btn)
+        self.assertIsNotNone(hist_btn)
+
+        # 1. Height and size policy match
+        self.assertEqual(set_btn.height(), hist_btn.height())
+        self.assertEqual(set_btn.sizePolicy().horizontalPolicy(), hist_btn.sizePolicy().horizontalPolicy())
+
+        # 2. Dot is internal to SidebarNavButton
+        self.assertFalse(set_btn._show_dot)
+        sidebar.set_settings_badge(True)
+        self.assertTrue(set_btn._show_dot)
+        sidebar.set_settings_badge(False)
+        self.assertFalse(set_btn._show_dot)
+
+    def test_part5_status_badge_fixed_size_never_elides(self) -> None:
+        """Verify StatusBadge has fixed size policy and width adapts without elision."""
+        badge = StatusBadge()
+        self.assertEqual(badge.sizePolicy().horizontalPolicy(), QSizePolicy.Policy.Fixed)
+        self.assertEqual(badge.sizePolicy().verticalPolicy(), QSizePolicy.Policy.Fixed)
+
+        badge.set_status("available")
+        w_avail = badge.width()
+        badge.set_status("error", "Couldn't reach GitHub.")
+        w_err = badge.width()
+        self.assertGreaterEqual(w_err, w_avail)
+        self.assertFalse(badge._text.text().endswith("..."))
 
 
 if __name__ == "__main__":

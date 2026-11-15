@@ -12,10 +12,12 @@ Two independent update channels:
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
 import traceback
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -26,9 +28,12 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QApplication
 
 from clipgrab.core.ffmpeg_utils import (
+    get_ffmpeg_path,
     get_ytdlp_path,
     invalidate_ffmpeg_cache,
     invalidate_ytdlp_cache,
+    verify_ffmpeg,
+    verify_ytdlp,
 )
 from clipgrab.core.logger import get_logger
 from clipgrab.version import APP_VERSION, VERSION_CHECK_URL
@@ -47,6 +52,23 @@ PERIODIC_CHECK_INTERVAL_MS = 6 * 3600 * 1000  # 6 hours
 
 # Subprocess flags — hide console window on Windows
 _CREATION_FLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+
+@dataclass
+class ComponentState:
+    """State of an updatable component (YouCut, yt-dlp, FFmpeg)."""
+
+    component: str                          # "youcut", "ytdlp", "ffmpeg"
+    status: str = "up_to_date"              # "up_to_date", "checking", "available", "downloading", "installing", "error"
+    current_version: str = ""
+    latest_version: str = ""
+    size_str: str = ""
+    release_notes_url: str = ""
+    download_url: str = ""
+    error_message: str = ""
+    progress_percent: int = 0
+    progress_speed: str = ""
+
 
 
 # ── Version helpers ──────────────────────────────────────────────────────────
@@ -244,13 +266,83 @@ def get_latest_pypi_version() -> Optional[str]:
 
 # ── FFmpeg helpers ───────────────────────────────────────────────────────────
 
+def parse_ffmpeg_installed_version(v_str: str) -> tuple[Optional[int], Optional[str]]:
+    """
+    Parse commit number and date from installed FFmpeg version string.
+    Example: 'N-127579-g5cb9fcd211-20261016' -> (127579, '2026-10-16')
+    """
+    if not v_str or v_str == "unknown":
+        return None, None
+    commit_match = re.search(r"N-(\d+)", v_str, re.IGNORECASE)
+    commit_num = int(commit_match.group(1)) if commit_match else None
+
+    # Date match: 8 digits like 20261016 or YYYY-MM-DD
+    date_match = re.search(r"(20\d{2})[-_]?(\d{2})[-_]?(\d{2})", v_str)
+    date_str = f"{date_match.group(1)}-{date_match.group(2)}-{date_match.group(3)}" if date_match else None
+    return commit_num, date_str
+
+
+def parse_ffmpeg_remote_version(release_data: dict, asset_name: str) -> tuple[Optional[int], Optional[str], str]:
+    """
+    Extract commit number, build date, and human-readable version string from release metadata.
+    Never returns the word 'latest'.
+    """
+    name = release_data.get("name", "")
+    body = release_data.get("body", "")
+    tag = release_data.get("tag_name", "")
+    published_at = release_data.get("published_at", "")
+
+    # 1. Look for commit number across name, asset_name, body, tag
+    commit_num: Optional[int] = None
+    for text in (asset_name, name, tag, body):
+        m = re.search(r"N-(\d+)", text, re.IGNORECASE)
+        if m:
+            commit_num = int(m.group(1))
+            break
+
+    # 2. Look for date in published_at, name, asset_name, tag
+    date_str: Optional[str] = None
+    for text in (published_at, name, asset_name, tag):
+        m = re.search(r"(20\d{2})[-_]?(\d{2})[-_]?(\d{2})", text)
+        if m:
+            date_str = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+            break
+
+    # 3. Construct display version (never "latest")
+    if commit_num and date_str:
+        display = f"N-{commit_num} · {date_str}"
+    elif commit_num:
+        display = f"N-{commit_num}"
+    elif date_str:
+        display = date_str
+    else:
+        # Fallback without the word latest
+        clean_tag = tag.replace("latest", "").replace("autobuild-", "").strip(" -_")
+        display = clean_tag if clean_tag else "New build"
+
+    return commit_num, date_str, display
+
+
+def is_ffmpeg_update_newer(
+    remote_commit: Optional[int],
+    remote_date: Optional[str],
+    installed_commit: Optional[int],
+    installed_date: Optional[str],
+) -> bool:
+    """Compare remote FFmpeg build against installed build."""
+    if remote_commit is not None and installed_commit is not None:
+        return remote_commit > installed_commit
+    if remote_date is not None and installed_date is not None:
+        return remote_date > installed_date
+    return False
+
+
 def get_installed_ffmpeg_version() -> str:
     """
     Get the installed FFmpeg version string by running ffmpeg.exe -version.
     Returns build string like 'N-127579-g5cb9fcd211-20261016' or 'unknown'.
     """
     try:
-        from clipgrab.core.ffmpeg_utils import verify_ffmpeg
         ok, info = verify_ffmpeg()
         if ok:
             parts = info.split(" ")
@@ -265,6 +357,8 @@ def get_installed_ffmpeg_version() -> str:
 def check_ffmpeg_update() -> Optional[dict]:
     """
     Query GitHub Releases API for the latest FFmpeg Windows build.
+    Selects the static GPL build (excluding shared builds).
+    Parses real build commit and date, never the word 'latest'.
 
     Returns:
         dict with {current_version, latest_version, update_available, download_url, size_str, release_url}
@@ -281,15 +375,22 @@ def check_ffmpeg_update() -> Optional[dict]:
             logger.debug("FFmpeg update check status code: %s", resp.status_code)
             return None
         data = resp.json()
-        tag = data.get("tag_name", "").strip()
         release_url = data.get("html_url", "https://github.com/BtbN/FFmpeg-Builds/releases")
 
+        # Select static win64 build (exclude -shared builds!)
         target_asset = None
         for asset in data.get("assets", []):
             name = asset.get("name", "").lower()
-            if "win64-gpl" in name and (name.endswith(".zip") or name.endswith(".exe")):
+            if "win64-gpl" in name and "-shared" not in name and name.endswith(".zip"):
                 target_asset = asset
                 break
+
+        if not target_asset:
+            for asset in data.get("assets", []):
+                name = asset.get("name", "").lower()
+                if "win64" in name and "-shared" not in name and name.endswith(".zip"):
+                    target_asset = asset
+                    break
 
         if not target_asset and data.get("assets"):
             target_asset = data["assets"][0]
@@ -297,21 +398,28 @@ def check_ffmpeg_update() -> Optional[dict]:
         if not target_asset:
             return None
 
+        asset_name = target_asset.get("name", "")
         size_bytes = target_asset.get("size", 0)
         size_mb = size_bytes / (1024 * 1024)
-        size_str = f"≈ {size_mb:.0f} MB" if size_mb > 0 else "≈ 82 MB"
+        size_str = f"≈ {size_mb:.0f} MB" if size_mb > 0 else "≈ 201 MB"
         dl_url = target_asset.get("browser_download_url", "")
 
-        latest_ver = tag.replace("autobuild-", "") if "autobuild-" in tag else tag
+        remote_commit, remote_date, display_ver = parse_ffmpeg_remote_version(data, asset_name)
         current_ver = get_installed_ffmpeg_version()
+        inst_commit, inst_date = parse_ffmpeg_installed_version(current_ver)
 
         update_available = False
-        if latest_ver and current_ver and current_ver != "unknown":
-            update_available = (latest_ver not in current_ver and current_ver not in latest_ver)
+        if current_ver and current_ver != "unknown":
+            update_available = is_ffmpeg_update_newer(remote_commit, remote_date, inst_commit, inst_date)
+
+        logger.info(
+            "FFmpeg check result — installed: %s (commit=%s, date=%s), remote: %s (commit=%s, date=%s), newer: %s, asset: %s",
+            current_ver, inst_commit, inst_date, display_ver, remote_commit, remote_date, update_available, asset_name,
+        )
 
         return {
             "current_version": current_ver,
-            "latest_version": latest_ver,
+            "latest_version": display_ver,
             "update_available": update_available,
             "download_url": dl_url,
             "size_str": size_str,
@@ -541,6 +649,14 @@ class UpdateChecker(QObject):
 
         logger.info("Starting yt-dlp self-update: %s -U", ytdlp_path)
         self.status_message.emit("Updating yt-dlp...")
+        bak_ytdlp = user_bin_dir / "yt-dlp.exe.bak"
+        if user_ytdlp.is_file():
+            try:
+                if bak_ytdlp.is_file():
+                    bak_ytdlp.unlink()
+                shutil.copy2(str(user_ytdlp), str(bak_ytdlp))
+            except Exception as be:
+                logger.warning("Could not backup yt-dlp before update: %s", be)
 
         try:
             import subprocess
@@ -562,7 +678,9 @@ class UpdateChecker(QObject):
             logger.debug("yt-dlp -U output: %s", output)
 
             if returncode == 0:
-                new_version = get_installed_ytdlp_version()
+                invalidate_ytdlp_cache()
+                ok, verified_str = verify_ytdlp(force=True)
+                new_version = verified_str.strip() if ok else get_installed_ytdlp_version()
                 logger.info("yt-dlp updated successfully to %s", new_version)
                 self.update_completed.emit(new_version)
                 self.status_message.emit(f"yt-dlp updated to v{new_version}")
@@ -572,6 +690,14 @@ class UpdateChecker(QObject):
                     "yt-dlp self-update failed (rc=%d): %s",
                     returncode, error_detail
                 )
+                if bak_exe.is_file() if 'bak_exe' in locals() else False:
+                    pass
+                if bak_ytdlp.is_file() and not user_ytdlp.is_file():
+                    try:
+                        shutil.copy2(str(bak_ytdlp), str(user_ytdlp))
+                        invalidate_ytdlp_cache()
+                    except Exception:
+                        pass
                 self.update_failed.emit(error_detail)
 
         except subprocess.TimeoutExpired:
@@ -589,6 +715,12 @@ class UpdateChecker(QObject):
             if self._cancel_requested:
                 return
             logger.error("yt-dlp self-update error: %s\n%s", e, traceback.format_exc())
+            if bak_ytdlp.is_file() and not user_ytdlp.is_file():
+                try:
+                    shutil.copy2(str(bak_ytdlp), str(user_ytdlp))
+                    invalidate_ytdlp_cache()
+                except Exception:
+                    pass
             self.update_failed.emit(str(e))
         finally:
             self._active_process = None
@@ -678,14 +810,20 @@ class FFmpegUpdater(QObject):
 
         user_ffmpeg = user_bin_dir / "ffmpeg.exe"
         tmp_archive = user_bin_dir / "ffmpeg_download.tmp"
-        tmp_exe = user_bin_dir / "ffmpeg.exe.tmp"
+        extract_dir = user_bin_dir / "tmp_ffmpeg_extract"
         bak_exe = user_bin_dir / "ffmpeg.exe.bak"
 
+        logger.info("[FFmpeg Update] Step 1/7: Initializing download from %s", self._download_url)
         try:
             self.status_message.emit("Downloading FFmpeg build...")
-            resp = requests.get(self._download_url, stream=True, timeout=30)
-            self._resp = resp
-            resp.raise_for_status()
+            try:
+                resp = requests.get(self._download_url, stream=True, timeout=30)
+                self._resp = resp
+                resp.raise_for_status()
+            except requests.RequestException as re:
+                logger.error("[FFmpeg Update] Download network request failed: %s", re)
+                self.update_failed.emit("Download failed (no internet)")
+                return
 
             total_size = int(resp.headers.get("content-length", 0))
             downloaded = 0
@@ -695,7 +833,7 @@ class FFmpegUpdater(QObject):
             with open(tmp_archive, "wb") as f:
                 for chunk in resp.iter_content(chunk_size=128 * 1024):
                     if self._cancel_requested:
-                        logger.info("FFmpeg download cancelled.")
+                        logger.info("[FFmpeg Update] Download cancelled by user.")
                         return
                     if chunk:
                         f.write(chunk)
@@ -709,73 +847,155 @@ class FFmpegUpdater(QObject):
                             last_emit = now
 
             if self._cancel_requested:
+                logger.info("[FFmpeg Update] Update cancelled by user.")
                 return
 
-            self.status_message.emit("Extracting FFmpeg binary...")
-            if zipfile.is_zipfile(tmp_archive):
-                with zipfile.ZipFile(tmp_archive, "r") as zf:
-                    ffmpeg_entry = None
-                    for name in zf.namelist():
-                        if name.endswith("ffmpeg.exe"):
-                            ffmpeg_entry = name
-                            break
-                    if not ffmpeg_entry:
-                        raise ValueError("Archive did not contain ffmpeg.exe")
-                    with zf.open(ffmpeg_entry) as src, open(tmp_exe, "wb") as dst:
-                        shutil.copyfileobj(src, dst)
-            else:
-                if tmp_exe.exists():
-                    tmp_exe.unlink()
-                shutil.move(str(tmp_archive), str(tmp_exe))
+            # Step 2: Check size
+            logger.info("[FFmpeg Update] Step 2/7: Checking downloaded file size (%d bytes)", downloaded)
+            if not tmp_archive.exists() or tmp_archive.stat().st_size < 1024:
+                logger.error("[FFmpeg Update] Downloaded archive is empty or invalid (<1KB)")
+                self.update_failed.emit("Download failed (no internet)")
+                return
 
-            # Verification step: run [tmp_exe, "-version"]
+            # Step 3: Extract archive to temp folder
+            logger.info("[FFmpeg Update] Step 3/7: Extracting ffmpeg binary to temp directory %s", extract_dir)
+            self.status_message.emit("Extracting FFmpeg binary...")
+            if extract_dir.exists():
+                shutil.rmtree(extract_dir, ignore_errors=True)
+            extract_dir.mkdir(parents=True, exist_ok=True)
+
+            tmp_exe = extract_dir / "ffmpeg.exe"
+            try:
+                if zipfile.is_zipfile(tmp_archive):
+                    with zipfile.ZipFile(tmp_archive, "r") as zf:
+                        ffmpeg_entry = None
+                        for name in zf.namelist():
+                            if name.endswith("ffmpeg.exe"):
+                                ffmpeg_entry = name
+                                break
+                        if not ffmpeg_entry:
+                            raise ValueError("Archive did not contain ffmpeg.exe")
+
+                        # Extract ffmpeg.exe
+                        with zf.open(ffmpeg_entry) as src, open(tmp_exe, "wb") as dst:
+                            shutil.copyfileobj(src, dst)
+
+                        # Also extract any DLLs in the same archive directory if present
+                        prefix = os.path.dirname(ffmpeg_entry)
+                        for name in zf.namelist():
+                            if name.endswith(".dll") and (not prefix or name.startswith(prefix)):
+                                dll_name = os.path.basename(name)
+                                with zf.open(name) as src, open(extract_dir / dll_name, "wb") as dst:
+                                    shutil.copyfileobj(src, dst)
+                else:
+                    shutil.move(str(tmp_archive), str(tmp_exe))
+            except Exception as ee:
+                logger.error("[FFmpeg Update] Extraction failed: %s", ee)
+                self.update_failed.emit("Couldn't extract ffmpeg.exe from the download")
+                return
+
+            if not tmp_exe.is_file():
+                self.update_failed.emit("Couldn't extract ffmpeg.exe from the download")
+                return
+
+            # Step 4: Self-test [tmp_exe, "-version"]
+            logger.info("[FFmpeg Update] Step 4/7: Self-testing extracted binary %s", tmp_exe)
             self.status_message.emit("Verifying FFmpeg binary...")
-            test_res = subprocess.run(
-                [str(tmp_exe), "-version"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                creationflags=_CREATION_FLAGS,
-            )
-            if test_res.returncode != 0:
-                raise RuntimeError(f"FFmpeg binary verification failed with rc={test_res.returncode}")
+            try:
+                test_res = subprocess.run(
+                    [str(tmp_exe), "-version"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    creationflags=_CREATION_FLAGS,
+                )
+                if test_res.returncode != 0:
+                    logger.error("[FFmpeg Update] Self-test failed (rc=%s): %s", test_res.returncode, test_res.stderr)
+                    self.update_failed.emit("New FFmpeg failed its self-test")
+                    return
+            except Exception as se:
+                logger.error("[FFmpeg Update] Self-test execution exception: %s", se)
+                self.update_failed.emit("New FFmpeg failed its self-test")
+                return
 
             first_line = test_res.stdout.split("\n")[0] if test_res.stdout else ""
             new_version = first_line.split(" ")[2] if len(first_line.split(" ")) > 2 else first_line.strip()
+            logger.info("[FFmpeg Update] Self-test succeeded. Version: %s", new_version)
 
-            # Backup old executable
+            # Step 5: Backup current binary to .bak
+            logger.info("[FFmpeg Update] Step 5/7: Backing up current binary to %s", bak_exe)
             if user_ffmpeg.is_file():
+                try:
+                    if bak_exe.is_file():
+                        bak_exe.unlink()
+                    shutil.copy2(str(user_ffmpeg), str(bak_exe))
+                except Exception as be:
+                    logger.warning("[FFmpeg Update] Could not backup existing binary: %s", be)
+
+            # Step 6: Atomic replace with 3x retry on lock
+            logger.info("[FFmpeg Update] Step 6/7: Atomically replacing %s", user_ffmpeg)
+            self.status_message.emit("Installing FFmpeg...")
+            replaced = False
+            for attempt in range(1, 4):
+                try:
+                    os.replace(str(tmp_exe), str(user_ffmpeg))
+                    for dll in extract_dir.glob("*.dll"):
+                        target_dll = user_bin_dir / dll.name
+                        os.replace(str(dll), str(target_dll))
+                    replaced = True
+                    break
+                except (PermissionError, OSError) as pe:
+                    logger.warning("[FFmpeg Update] Atomic replace locked on attempt %d/3: %s", attempt, pe)
+                    if attempt < 3:
+                        time.sleep(1)
+
+            if not replaced:
+                logger.error("[FFmpeg Update] Failed to replace %s after 3 attempts — binary is locked", user_ffmpeg)
+                if bak_exe.is_file() and not user_ffmpeg.is_file():
+                    shutil.copy2(str(bak_exe), str(user_ffmpeg))
+                self.update_failed.emit("ffmpeg.exe is in use — wait for downloads to finish and retry")
+                return
+
+            # Step 7: Post-install verification & re-read version
+            logger.info("[FFmpeg Update] Step 7/7: Re-verifying installed binary at %s", user_ffmpeg)
+            invalidate_ffmpeg_cache()
+            ok, verified_info = verify_ffmpeg(force=True)
+            if not ok:
+                logger.error("[FFmpeg Update] Post-install verification failed! Restoring backup...")
                 if bak_exe.is_file():
-                    bak_exe.unlink()
-                shutil.copy2(str(user_ffmpeg), str(bak_exe))
+                    shutil.copy2(str(bak_exe), str(user_ffmpeg))
+                    invalidate_ffmpeg_cache()
+                self.update_failed.emit("New FFmpeg failed its self-test")
+                return
 
-            # Atomic swap
-            if user_ffmpeg.is_file():
-                user_ffmpeg.unlink()
-            shutil.move(str(tmp_exe), str(user_ffmpeg))
+            first_v_line = verified_info.split("\n")[0] if verified_info else ""
+            parts = first_v_line.split(" ")
+            installed_build = parts[2] if len(parts) > 2 else first_v_line.strip()
 
-            logger.info("FFmpeg successfully updated to %s", new_version)
-            self.update_completed.emit(new_version)
-            self.status_message.emit(f"FFmpeg updated to {new_version}")
+            logger.info("[FFmpeg Update] Pipeline completed successfully! New build: %s", installed_build)
+            self.update_completed.emit(installed_build)
+            self.status_message.emit(f"FFmpeg updated to {installed_build}")
 
         except Exception as e:
             if self._cancel_requested:
+                logger.info("[FFmpeg Update] Cancelled during execution.")
                 return
-            logger.error("FFmpeg update failed: %s", e)
+            logger.error("[FFmpeg Update] Unexpected exception in update pipeline: %s", e)
             if bak_exe.is_file() and not user_ffmpeg.is_file():
                 try:
                     shutil.copy2(str(bak_exe), str(user_ffmpeg))
-                    logger.info("Restored FFmpeg backup from %s", bak_exe)
-                except Exception as re:
-                    logger.warning("Failed to restore FFmpeg backup: %s", re)
-            self.update_failed.emit(str(e))
-        finally:
-            for p in (tmp_archive, tmp_exe):
-                try:
-                    if p.is_file():
-                        p.unlink()
+                    invalidate_ffmpeg_cache()
                 except Exception:
                     pass
+            self.update_failed.emit(str(e))
+        finally:
+            try:
+                if tmp_archive.is_file():
+                    tmp_archive.unlink()
+            except Exception:
+                pass
+            if extract_dir.exists():
+                shutil.rmtree(extract_dir, ignore_errors=True)
 
 
 # ── Update Manager ───────────────────────────────────────────────────────────
@@ -816,6 +1036,7 @@ class UpdateManager(QObject):
     ffmpeg_progress = Signal(int, str)
     all_checks_completed = Signal(str)
     has_update_available = Signal(bool)
+    component_state_changed = Signal(object)  # ComponentState
 
     def __init__(self, parent: Optional[QObject] = None, settings: Optional[AppSettings] = None) -> None:
         super().__init__(parent)
@@ -844,7 +1065,16 @@ class UpdateManager(QObject):
         self._app_update_url: str = ""
         self._latest_ffmpeg_download_url: str = ""
         self._app_check_is_manual: bool = False
+        self._ytdlp_check_is_manual: bool = False
+        self._ffmpeg_check_is_manual: bool = False
         self._pending_app_update: bool = False
+
+        # Unified component states
+        self._states: dict[str, ComponentState] = {
+            "youcut": ComponentState(component="youcut", status="up_to_date", current_version=APP_VERSION),
+            "ytdlp": ComponentState(component="ytdlp", status="up_to_date", current_version=get_installed_ytdlp_version()),
+            "ffmpeg": ComponentState(component="ffmpeg", status="up_to_date", current_version=get_installed_ffmpeg_version()),
+        }
 
         # Component periodic timers (evaluates cooldown every 6 hours)
         self._youcut_timer = QTimer(self)
@@ -960,6 +1190,51 @@ class UpdateManager(QObject):
                 return True
         return False
 
+    def get_component_state(self, component: str) -> ComponentState:
+        """Get the current unified state of a component."""
+        return self._states.get(component, ComponentState(component=component))
+
+    def _set_component_state(self, state: ComponentState) -> None:
+        """Update unified component state and emit both new and legacy signals."""
+        self._states[state.component] = state
+        self.component_state_changed.emit(state)
+
+        if state.component == "youcut":
+            self.app_status_changed.emit(
+                state.status,
+                state.latest_version or state.current_version,
+                state.release_notes_url,
+                state.download_url,
+            )
+        elif state.component == "ytdlp":
+            self.ytdlp_status_changed.emit(
+                state.status,
+                state.current_version,
+                state.latest_version,
+            )
+        elif state.component == "ffmpeg":
+            self.ffmpeg_status_changed.emit(
+                state.status,
+                state.current_version,
+                state.latest_version,
+                state.size_str,
+                state.release_notes_url,
+            )
+
+    def is_checking(self, component: str) -> bool:
+        """Return True if component is currently checking for updates."""
+        if component == "youcut":
+            return bool(self._app_check_thread and self._app_check_thread.isRunning())
+        elif component == "ytdlp":
+            return bool(self._check_thread and self._check_thread.isRunning())
+        elif component == "ffmpeg":
+            return bool(self._ffmpeg_check_thread and self._ffmpeg_check_thread.isRunning())
+        return False
+
+    def _is_operation_in_progress(self, component: str) -> bool:
+        """Check if an update or check operation is already in flight for component."""
+        return self.is_mid_update(component) or self.is_checking(component)
+
     def load_cached_badges(self) -> None:
         """
         Show cached badges instantly on launch.
@@ -974,18 +1249,19 @@ class UpdateManager(QObject):
         latest_youcut = c_youcut.get("latest_version", "")
         if latest_youcut:
             if _is_installed_ge_latest(cur_youcut, latest_youcut):
-                # Installed version is equal or newer: drop cache!
                 c_youcut["latest_version"] = ""
                 c_youcut["download_url"] = ""
                 self._save_settings()
-                self.app_status_changed.emit("up_to_date", cur_youcut, "", "")
+                self._set_component_state(ComponentState("youcut", "up_to_date", cur_youcut, cur_youcut))
             else:
-                self.app_status_changed.emit(
-                    "available",
-                    latest_youcut,
-                    c_youcut.get("release_notes_url", ""),
-                    c_youcut.get("download_url", ""),
-                )
+                self._set_component_state(ComponentState(
+                    component="youcut",
+                    status="available",
+                    current_version=cur_youcut,
+                    latest_version=latest_youcut,
+                    release_notes_url=c_youcut.get("release_notes_url", ""),
+                    download_url=c_youcut.get("download_url", ""),
+                ))
 
         # 2. yt-dlp
         cur_ytdlp = get_installed_ytdlp_version()
@@ -995,27 +1271,45 @@ class UpdateManager(QObject):
             if _is_installed_ge_latest(cur_ytdlp, latest_ytdlp):
                 c_ytdlp["latest_version"] = ""
                 self._save_settings()
-                self.ytdlp_status_changed.emit("up_to_date", cur_ytdlp, cur_ytdlp)
+                self._set_component_state(ComponentState("ytdlp", "up_to_date", cur_ytdlp, cur_ytdlp))
             else:
-                self.ytdlp_status_changed.emit("available", cur_ytdlp, latest_ytdlp)
+                self._set_component_state(ComponentState(
+                    component="ytdlp",
+                    status="available",
+                    current_version=cur_ytdlp,
+                    latest_version=latest_ytdlp,
+                ))
 
         # 3. FFmpeg
         cur_ffmpeg = get_installed_ffmpeg_version()
         c_ffmpeg = self._get_cache("ffmpeg")
         latest_ffmpeg = c_ffmpeg.get("latest_version", "")
         if latest_ffmpeg and cur_ffmpeg != "unknown":
-            if _is_installed_ge_latest(cur_ffmpeg, latest_ffmpeg):
+            inst_commit, inst_date = parse_ffmpeg_installed_version(cur_ffmpeg)
+            rem_commit = None
+            m = re.search(r"N-(\d+)", latest_ffmpeg)
+            if m:
+                rem_commit = int(m.group(1))
+            rem_date = None
+            m_date = re.search(r"(20\d{2})[-_]?(\d{2})[-_]?(\d{2})", latest_ffmpeg)
+            if m_date:
+                rem_date = f"{m_date.group(1)}-{m_date.group(2)}-{m_date.group(3)}"
+
+            # If installed is already up-to-date or newer, drop cache
+            if not is_ffmpeg_update_newer(rem_commit, rem_date, inst_commit, inst_date):
                 c_ffmpeg["latest_version"] = ""
                 self._save_settings()
-                self.ffmpeg_status_changed.emit("up_to_date", cur_ffmpeg, cur_ffmpeg, "", "")
+                self._set_component_state(ComponentState("ffmpeg", "up_to_date", cur_ffmpeg, cur_ffmpeg))
             else:
-                self.ffmpeg_status_changed.emit(
-                    "available",
-                    cur_ffmpeg,
-                    latest_ffmpeg,
-                    c_ffmpeg.get("size", "≈ 82 MB"),
-                    c_ffmpeg.get("release_notes_url", ""),
-                )
+                self._set_component_state(ComponentState(
+                    component="ffmpeg",
+                    status="available",
+                    current_version=cur_ffmpeg,
+                    latest_version=latest_ffmpeg,
+                    size_str=c_ffmpeg.get("size", "≈ 201 MB"),
+                    release_notes_url=c_ffmpeg.get("release_notes_url", ""),
+                    download_url=c_ffmpeg.get("download_url", ""),
+                ))
 
         self.has_update_available.emit(self._has_any_update_available())
 
@@ -1159,7 +1453,10 @@ class UpdateManager(QObject):
 
     @auto_update.setter
     def auto_update(self, value: bool) -> None:
-        self._auto_update = bool(value)
+        val = bool(value)
+        if self._auto_update == val:
+            return
+        self._auto_update = val
         if self._settings:
             self._settings.update(auto_update_ytdlp=self._auto_update)
             self._save_settings()
@@ -1182,7 +1479,10 @@ class UpdateManager(QObject):
 
     @auto_update_app.setter
     def auto_update_app(self, value: bool) -> None:
-        self._auto_update_app = bool(value)
+        val = bool(value)
+        if self._auto_update_app == val:
+            return
+        self._auto_update_app = val
         if self._settings:
             self._settings.update(auto_update_app=self._auto_update_app)
             self._save_settings()
@@ -1205,7 +1505,10 @@ class UpdateManager(QObject):
 
     @auto_update_ffmpeg.setter
     def auto_update_ffmpeg(self, value: bool) -> None:
-        self._auto_update_ffmpeg = bool(value)
+        val = bool(value)
+        if self._auto_update_ffmpeg == val:
+            return
+        self._auto_update_ffmpeg = val
         if self._settings:
             self._settings.update(auto_update_ffmpeg=self._auto_update_ffmpeg)
             self._save_settings()
@@ -1349,22 +1652,22 @@ class UpdateManager(QObject):
             return bool(self._ffmpeg_update_thread and self._ffmpeg_update_thread.isRunning())
         return False
 
-    def check_all(self, force: bool = True) -> None:
+    def check_all(self, force: bool = True, is_manual: bool = True) -> None:
         """
         Trigger update checks for YouCut, yt-dlp, and FFmpeg (bypasses cooldown when force=True).
         Skips components that are mid-update.
         """
-        logger.info("Check all updates triggered (force=%s)", force)
+        logger.info("Check all updates triggered (force=%s, is_manual=%s)", force, is_manual)
         if not self.is_mid_update("youcut"):
-            self.check_app(force=force, is_manual=True)
+            self.check_app(force=force, is_manual=is_manual)
         if not self.is_mid_update("ytdlp"):
-            self.check_ytdlp(force=force)
+            self.check_ytdlp(force=force, is_manual=is_manual)
         if not self.is_mid_update("ffmpeg"):
-            self.check_ffmpeg(force=force)
+            self.check_ffmpeg(force=force, is_manual=is_manual)
 
     def manual_check(self) -> None:
         """Force update checks for all components (triggered by user)."""
-        self.check_all(force=True)
+        self.check_all(force=True, is_manual=True)
 
     # ── YouCut App Check ──────────────────────────────────────────────────────
 
@@ -1372,8 +1675,11 @@ class UpdateManager(QObject):
         """Check for YouCut app updates."""
         if not force and self._is_cooldown_active("youcut", COOLDOWN_YOUCUT_SECONDS):
             return
+        if self._is_operation_in_progress("youcut"):
+            logger.info("YouCut check/update already in progress — skipping")
+            return
 
-        self.app_status_changed.emit("checking", APP_VERSION, "", "")
+        self._set_component_state(ComponentState("youcut", "checking", current_version=APP_VERSION))
         self._run_app_check(is_manual=is_manual)
 
     def _run_app_check(self, is_manual: bool = False) -> None:
@@ -1410,7 +1716,7 @@ class UpdateManager(QObject):
         c["download_url"] = ""
         self._record_successful_check("youcut")
 
-        self.app_status_changed.emit("up_to_date", APP_VERSION, "", "")
+        self._set_component_state(ComponentState("youcut", "up_to_date", current_version=APP_VERSION, latest_version=APP_VERSION))
         if self._app_check_is_manual:
             self.toast_message.emit(f"YouCut is up to date (v{APP_VERSION}).")
         self.has_update_available.emit(self._has_any_update_available())
@@ -1430,7 +1736,7 @@ class UpdateManager(QObject):
 
         self._save_settings()
 
-        if self._auto_update_app:
+        if not self._app_check_is_manual and self._auto_update_app:
             if self._queue_busy:
                 self._pending_app_update = True
                 logger.info("YouCut update deferred — queue is busy")
@@ -1441,7 +1747,14 @@ class UpdateManager(QObject):
                 if getattr(sys, "frozen", False):
                     self.install_frozen_app_update(url)
 
-        self.app_status_changed.emit("available", version, notes, url)
+        self._set_component_state(ComponentState(
+            component="youcut",
+            status="available",
+            current_version=APP_VERSION,
+            latest_version=version,
+            release_notes_url=notes,
+            download_url=url,
+        ))
         self.app_update_available.emit(version, notes, url)
         self.has_update_available.emit(True)
 
@@ -1453,9 +1766,21 @@ class UpdateManager(QObject):
         self._save_settings()
 
         if c.get("latest_version"):
-            self.app_status_changed.emit("available", c["latest_version"], c.get("release_notes_url", ""), c.get("download_url", ""))
+            self._set_component_state(ComponentState(
+                component="youcut",
+                status="available",
+                current_version=APP_VERSION,
+                latest_version=c["latest_version"],
+                release_notes_url=c.get("release_notes_url", ""),
+                download_url=c.get("download_url", ""),
+            ))
         else:
-            self.app_status_changed.emit("error", APP_VERSION, "", "")
+            self._set_component_state(ComponentState(
+                component="youcut",
+                status="error",
+                current_version=APP_VERSION,
+                error_message="Couldn't reach GitHub Releases.",
+            ))
         if self._app_check_is_manual:
             self.toast_message.emit("Could not check for YouCut updates.")
 
@@ -1466,7 +1791,18 @@ class UpdateManager(QObject):
             QDesktopServices.openUrl(QUrl(url))
             return
 
-        self.app_status_changed.emit("updating", APP_VERSION, "", "")
+        if not download_url:
+            logger.error("No Windows installer URL available for YouCut update.")
+            self._set_component_state(ComponentState(
+                component="youcut",
+                status="error",
+                current_version=APP_VERSION,
+                error_message="No Windows installer asset found in latest release",
+            ))
+            self.toast_message.emit("No Windows installer asset found in latest release")
+            return
+
+        self._set_component_state(ComponentState("youcut", "installing", current_version=APP_VERSION, download_url=download_url))
         self.toast_message.emit("Downloading YouCut installer...")
         downloader = AppInstallerDownloader(download_url)
         self._app_installer_worker = downloader
@@ -1504,21 +1840,26 @@ class UpdateManager(QObject):
                 app.quit()
         except Exception as e:
             logger.error("Failed to run installer: %s", e)
+            self._set_component_state(ComponentState("youcut", "error", current_version=APP_VERSION, error_message=f"Failed to launch installer: {e}"))
             self.toast_message.emit(f"Failed to launch installer: {e}")
 
     def _on_installer_failed(self, error_msg: str) -> None:
         logger.warning("Installer download failed: %s", error_msg)
-        self.app_status_changed.emit("error", APP_VERSION, "", "")
+        self._set_component_state(ComponentState("youcut", "error", current_version=APP_VERSION, error_message=error_msg))
         self.toast_message.emit(f"Failed to download installer: {error_msg}")
 
     # ── yt-dlp Check & Update ─────────────────────────────────────────────────
 
-    def check_ytdlp(self, force: bool = False) -> None:
+    def check_ytdlp(self, force: bool = False, is_manual: bool = False) -> None:
         """Check for yt-dlp updates."""
         if not force and self._is_cooldown_active("ytdlp", COOLDOWN_YTDLP_SECONDS):
             return
+        if self._is_operation_in_progress("ytdlp"):
+            logger.info("yt-dlp check/update already in progress — skipping")
+            return
 
-        self.ytdlp_status_changed.emit("checking", get_installed_ytdlp_version(), "")
+        self._ytdlp_check_is_manual = is_manual
+        self._set_component_state(ComponentState("ytdlp", "checking", current_version=get_installed_ytdlp_version()))
         self._run_check(force=force)
 
     def _run_check(self, force: bool = False) -> None:
@@ -1552,9 +1893,9 @@ class UpdateManager(QObject):
             c["last_check_success"] = False
             self._save_settings()
             if c.get("latest_version"):
-                self.ytdlp_status_changed.emit("available", current, c["latest_version"])
+                self._set_component_state(ComponentState("ytdlp", "available", current, c["latest_version"]))
             else:
-                self.ytdlp_status_changed.emit("error", current, "")
+                self._set_component_state(ComponentState("ytdlp", "error", current, error_message="Couldn't check PyPI."))
             return
 
         self._record_successful_check("ytdlp")
@@ -1563,7 +1904,7 @@ class UpdateManager(QObject):
             logger.info("yt-dlp is up to date (v%s)", current)
             c["latest_version"] = ""
             self._save_settings()
-            self.ytdlp_status_changed.emit("up_to_date", current, current)
+            self._set_component_state(ComponentState("ytdlp", "up_to_date", current, current))
             self.has_update_available.emit(self._has_any_update_available())
             return
 
@@ -1571,7 +1912,21 @@ class UpdateManager(QObject):
         c["latest_version"] = latest
         logger.info("yt-dlp update available: %s -> %s", current, latest)
 
-        if self._auto_update:
+        # Check 24-hour failure backoff
+        failed_ver = c.get("failed_version", "")
+        failed_at = c.get("failed_at", "")
+        in_failure_backoff = False
+        if failed_ver and failed_ver == latest and failed_at:
+            try:
+                f_dt = datetime.fromisoformat(failed_at)
+                if f_dt.tzinfo is None:
+                    f_dt = f_dt.replace(tzinfo=timezone.utc)
+                if (datetime.now(timezone.utc) - f_dt).total_seconds() < 24 * 3600:
+                    in_failure_backoff = True
+            except Exception:
+                pass
+
+        if not self._ytdlp_check_is_manual and self._auto_update and not in_failure_backoff:
             if self._queue_busy:
                 self._pending_update = True
                 logger.info("Update deferred — queue is busy")
@@ -1580,35 +1935,53 @@ class UpdateManager(QObject):
                 )
             else:
                 self._perform_update()
+        elif in_failure_backoff and not self._ytdlp_check_is_manual:
+            logger.info("yt-dlp auto-update suppressed by 24h failure backoff for %s", latest)
+            self._set_component_state(ComponentState(
+                component="ytdlp",
+                status="error",
+                current_version=current,
+                latest_version=latest,
+                error_message=c.get("last_failure_reason", "Update failed recently. Retry available."),
+            ))
+            self.has_update_available.emit(True)
+            return
         else:
-            # Toggle OFF: one-time toast
             if c.get("last_toast_version") != latest:
                 self.toast_message.emit(f"yt-dlp update available: v{current} → v{latest}")
                 c["last_toast_version"] = latest
 
         self._save_settings()
-        self.ytdlp_status_changed.emit("available", current, latest)
+        self._set_component_state(ComponentState("ytdlp", "available", current, latest))
         self.update_available.emit(current, latest)
         self.has_update_available.emit(True)
 
     def update_ytdlp(self) -> None:
         """Trigger yt-dlp update."""
-        self.ytdlp_status_changed.emit("updating", get_installed_ytdlp_version(), "")
+        if self._is_operation_in_progress("ytdlp") and self._states["ytdlp"].status in ("downloading", "installing"):
+            return
+        self._set_component_state(ComponentState("ytdlp", "downloading", get_installed_ytdlp_version(), self._latest_version or ""))
         self._perform_update()
 
     def cancel_ytdlp_update(self) -> None:
-        """Cancel running yt-dlp update."""
+        """Cancel running yt-dlp update and return card to available."""
         if self._update_worker:
             self._update_worker.cancel()
         if self._update_thread and self._update_thread.isRunning():
             self._update_thread.quit()
             self._update_thread.wait(1000)
-        self.ytdlp_status_changed.emit("up_to_date", get_installed_ytdlp_version(), "")
+        c = self._get_cache("ytdlp")
+        latest = c.get("latest_version", "")
+        cur = get_installed_ytdlp_version()
+        if latest:
+            self._set_component_state(ComponentState("ytdlp", "available", cur, latest))
+        else:
+            self._set_component_state(ComponentState("ytdlp", "up_to_date", cur, cur))
         self.toast_message.emit("yt-dlp update cancelled.")
 
     def _perform_update(self) -> None:
         self._pending_update = False
-        self.ytdlp_status_changed.emit("updating", get_installed_ytdlp_version(), self._latest_version or "")
+        self._set_component_state(ComponentState("ytdlp", "downloading", get_installed_ytdlp_version(), self._latest_version or ""))
 
         updater = UpdateChecker()
         self._update_worker = updater
@@ -1639,25 +2012,38 @@ class UpdateManager(QObject):
         logger.info("yt-dlp updated to %s", new_version)
         c = self._get_cache("ytdlp")
         c["latest_version"] = ""
+        c["failed_version"] = ""
+        c["failed_at"] = ""
+        c["last_failure_reason"] = ""
         self._save_settings()
-        self.ytdlp_status_changed.emit("up_to_date", new_version, new_version)
+        self._set_component_state(ComponentState("ytdlp", "up_to_date", new_version, new_version))
         self.update_installed.emit(new_version)
         self.toast_message.emit(f"yt-dlp updated to v{new_version}")
         self.has_update_available.emit(self._has_any_update_available())
 
     def _on_update_failed(self, error_msg: str) -> None:
         logger.warning("yt-dlp update failed: %s (will retry at next trigger)", error_msg)
-        self.ytdlp_status_changed.emit("error", get_installed_ytdlp_version(), "")
+        c = self._get_cache("ytdlp")
+        c["failed_version"] = c.get("latest_version", "")
+        c["failed_at"] = datetime.now(timezone.utc).isoformat()
+        c["last_failure_reason"] = error_msg
+        c["last_check_success"] = False
+        self._save_settings()
+        self._set_component_state(ComponentState("ytdlp", "error", get_installed_ytdlp_version(), error_message=error_msg))
 
     # ── FFmpeg Check & Update ─────────────────────────────────────────────────
 
-    def check_ffmpeg(self, force: bool = False) -> None:
+    def check_ffmpeg(self, force: bool = False, is_manual: bool = False) -> None:
         """Check for FFmpeg updates."""
         if not force and self._is_cooldown_active("ffmpeg", COOLDOWN_FFMPEG_SECONDS):
             return
+        if self._is_operation_in_progress("ffmpeg"):
+            logger.info("FFmpeg check/update already in progress — skipping")
+            return
 
+        self._ffmpeg_check_is_manual = is_manual
         cur_v = get_installed_ffmpeg_version()
-        self.ffmpeg_status_changed.emit("checking", cur_v, "", "", "")
+        self._set_component_state(ComponentState("ffmpeg", "checking", current_version=cur_v))
 
         checker = FFmpegUpdateChecker()
         self._ffmpeg_checker = checker
@@ -1693,26 +2079,70 @@ class UpdateManager(QObject):
 
         if available:
             c["latest_version"] = latest
-            if self._auto_update_ffmpeg:
+
+            # Check 24-hour failure backoff
+            failed_ver = c.get("failed_version", "")
+            failed_at = c.get("failed_at", "")
+            in_failure_backoff = False
+            if failed_ver and failed_ver == latest and failed_at:
+                try:
+                    f_dt = datetime.fromisoformat(failed_at)
+                    if f_dt.tzinfo is None:
+                        f_dt = f_dt.replace(tzinfo=timezone.utc)
+                    if (datetime.now(timezone.utc) - f_dt).total_seconds() < 24 * 3600:
+                        in_failure_backoff = True
+                except Exception:
+                    pass
+
+            # Manual check NEVER triggers auto-download or auto-install!
+            if not self._ffmpeg_check_is_manual and self._auto_update_ffmpeg and not in_failure_backoff:
                 if self._queue_busy:
                     self._pending_ffmpeg_update = True
                     logger.info("FFmpeg update deferred — queue is busy")
                     self.toast_message.emit("FFmpeg update available — will install when queue is idle")
                 else:
                     self.update_ffmpeg(download_url=dl_url)
+            elif in_failure_backoff and not self._ffmpeg_check_is_manual:
+                logger.info("FFmpeg auto-update suppressed by 24h failure backoff for %s", latest)
+                self._set_component_state(ComponentState(
+                    component="ffmpeg",
+                    status="error",
+                    current_version=cur,
+                    latest_version=latest,
+                    size_str=size,
+                    release_notes_url=rel_url,
+                    download_url=dl_url,
+                    error_message=c.get("last_failure_reason", "Update failed recently. Retry available."),
+                ))
+                self.has_update_available.emit(True)
+                return
             else:
-                # Toggle OFF: one-time toast
                 if c.get("last_toast_version") != latest:
                     self.toast_message.emit(f"FFmpeg update available: {latest}")
                     c["last_toast_version"] = latest
 
             self._save_settings()
-            self.ffmpeg_status_changed.emit("available", cur, latest, size, rel_url)
+            self._set_component_state(ComponentState(
+                component="ffmpeg",
+                status="available",
+                current_version=cur,
+                latest_version=latest,
+                size_str=size,
+                release_notes_url=rel_url,
+                download_url=dl_url,
+            ))
             self.has_update_available.emit(True)
         else:
             c["latest_version"] = ""
             self._save_settings()
-            self.ffmpeg_status_changed.emit("up_to_date", cur, latest, size, rel_url)
+            self._set_component_state(ComponentState(
+                component="ffmpeg",
+                status="up_to_date",
+                current_version=cur,
+                latest_version=latest,
+                size_str=size,
+                release_notes_url=rel_url,
+            ))
             self.has_update_available.emit(self._has_any_update_available())
 
     def _on_ffmpeg_check_failed(self, error_msg: str) -> None:
@@ -1722,13 +2152,30 @@ class UpdateManager(QObject):
         c["last_check_success"] = False
         self._save_settings()
 
+        cur_v = get_installed_ffmpeg_version()
         if c.get("latest_version"):
-            self.ffmpeg_status_changed.emit("available", get_installed_ffmpeg_version(), c["latest_version"], c.get("size", ""), c.get("release_notes_url", ""))
+            self._set_component_state(ComponentState(
+                component="ffmpeg",
+                status="available",
+                current_version=cur_v,
+                latest_version=c["latest_version"],
+                size_str=c.get("size", ""),
+                release_notes_url=c.get("release_notes_url", ""),
+                download_url=c.get("download_url", ""),
+            ))
         else:
-            self.ffmpeg_status_changed.emit("error", get_installed_ffmpeg_version(), "", "", "")
+            self._set_component_state(ComponentState(
+                component="ffmpeg",
+                status="error",
+                current_version=cur_v,
+                error_message="Couldn't check GitHub.",
+            ))
 
     def update_ffmpeg(self, download_url: Optional[str] = None) -> None:
         """Download and install the latest FFmpeg build in a background thread."""
+        if self._is_operation_in_progress("ffmpeg") and self._states["ffmpeg"].status in ("downloading", "installing"):
+            return
+
         url = download_url or self._latest_ffmpeg_download_url
         if not url:
             result = check_ffmpeg_update()
@@ -1740,7 +2187,7 @@ class UpdateManager(QObject):
                 return
 
         self._pending_ffmpeg_update = False
-        self.ffmpeg_status_changed.emit("updating", get_installed_ffmpeg_version(), "", "", "")
+        self._set_component_state(ComponentState("ffmpeg", "downloading", get_installed_ffmpeg_version(), download_url=url))
         updater = FFmpegUpdater(download_url=url)
         self._ffmpeg_updater = updater
         thread = QThread(self)
@@ -1768,13 +2215,27 @@ class UpdateManager(QObject):
         self._ffmpeg_update_thread = None
 
     def cancel_ffmpeg_update(self) -> None:
-        """Cancel running FFmpeg update."""
+        """Cancel running FFmpeg update and return card to available."""
         if self._ffmpeg_updater:
             self._ffmpeg_updater.cancel()
         if self._ffmpeg_update_thread and self._ffmpeg_update_thread.isRunning():
             self._ffmpeg_update_thread.quit()
             self._ffmpeg_update_thread.wait(1000)
-        self.ffmpeg_status_changed.emit("up_to_date", get_installed_ffmpeg_version(), "", "", "")
+        c = self._get_cache("ffmpeg")
+        latest = c.get("latest_version", "")
+        cur = get_installed_ffmpeg_version()
+        if latest:
+            self._set_component_state(ComponentState(
+                component="ffmpeg",
+                status="available",
+                current_version=cur,
+                latest_version=latest,
+                size_str=c.get("size", ""),
+                release_notes_url=c.get("release_notes_url", ""),
+                download_url=c.get("download_url", ""),
+            ))
+        else:
+            self._set_component_state(ComponentState("ffmpeg", "up_to_date", cur, cur))
         self.toast_message.emit("FFmpeg update cancelled.")
 
     def _on_ffmpeg_completed(self, new_ver: str) -> None:
@@ -1782,12 +2243,21 @@ class UpdateManager(QObject):
         logger.info("FFmpeg updated to %s", new_ver)
         c = self._get_cache("ffmpeg")
         c["latest_version"] = ""
+        c["failed_version"] = ""
+        c["failed_at"] = ""
+        c["last_failure_reason"] = ""
         self._save_settings()
-        self.ffmpeg_status_changed.emit("up_to_date", new_ver, new_ver, "", "")
+        self._set_component_state(ComponentState("ffmpeg", "up_to_date", new_ver, new_ver))
         self.toast_message.emit(f"FFmpeg updated to {new_ver}")
         self.has_update_available.emit(self._has_any_update_available())
 
     def _on_ffmpeg_failed(self, error_msg: str) -> None:
         logger.warning("FFmpeg update failed: %s", error_msg)
-        self.ffmpeg_status_changed.emit("error", get_installed_ffmpeg_version(), "", "", "")
+        c = self._get_cache("ffmpeg")
+        c["failed_version"] = c.get("latest_version", "")
+        c["failed_at"] = datetime.now(timezone.utc).isoformat()
+        c["last_failure_reason"] = error_msg
+        c["last_check_success"] = False
+        self._save_settings()
+        self._set_component_state(ComponentState("ffmpeg", "error", get_installed_ffmpeg_version(), error_message=error_msg))
         self.toast_message.emit(f"FFmpeg update failed: {error_msg}")
