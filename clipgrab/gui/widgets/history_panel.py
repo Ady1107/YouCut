@@ -9,12 +9,14 @@ from __future__ import annotations
 from clipgrab.gui.icons import get_svg_icon
 
 
-from typing import Optional
+from typing import Callable, Optional
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
+    QDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -26,11 +28,116 @@ from PySide6.QtWidgets import (
 )
 
 from clipgrab.core.platforms import detect_platform
+from clipgrab.core.thumbnail_service import ThumbnailService
 from clipgrab.data.history_db import HistoryDB, HistoryEntry
 from clipgrab.gui.widgets.history_item_widget import HistoryItemWidget
+from clipgrab.gui.widgets.toast_notification import show_toast
 from clipgrab.core.logger import get_logger
 
 logger = get_logger("history_panel")
+
+
+class ClearHistoryDialog(QDialog):
+    """
+    Confirmation dialog for clearing history with optional deletion of downloaded files.
+    """
+
+    def __init__(
+        self,
+        count: int,
+        is_dark: bool = True,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Clear All History")
+        self.setModal(True)
+        self.setFixedWidth(420)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(16)
+
+        title_lbl = QLabel("Clear all history?")
+        title_lbl.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        layout.addWidget(title_lbl)
+
+        desc_lbl = QLabel(f"This removes all {count} entries from History.")
+        desc_lbl.setFont(QFont("Segoe UI", 10))
+        desc_lbl.setWordWrap(True)
+        layout.addWidget(desc_lbl)
+
+        self._delete_files_cb = QCheckBox("Also delete the downloaded files from disk")
+        self._delete_files_cb.setFont(QFont("Segoe UI", 9))
+        self._delete_files_cb.setChecked(False)  # UNCHECKED by default
+        layout.addWidget(self._delete_files_cb)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+        btn_row.addStretch()
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setFont(QFont("Segoe UI", 9))
+        cancel_btn.setFixedHeight(34)
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn)
+
+        clear_btn = QPushButton("Clear all")
+        clear_btn.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        clear_btn.setFixedHeight(34)
+        clear_btn.clicked.connect(self.accept)
+        btn_row.addWidget(clear_btn)
+
+        layout.addLayout(btn_row)
+
+        bg = "#181A24" if is_dark else "#FFFFFF"
+        text_col = "#F3F4F7" if is_dark else "#111318"
+        desc_col = "#9DA3B4" if is_dark else "#5A6170"
+        border_col = "rgba(255, 255, 255, 0.1)" if is_dark else "#DCE0E8"
+        cancel_bg = "#232736" if is_dark else "#F0F2F6"
+        cancel_border = "#2E3346" if is_dark else "#CCD1DC"
+
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {bg};
+                border: 1px solid {border_col};
+                border-radius: 12px;
+            }}
+            QLabel {{
+                color: {text_col};
+            }}
+            QCheckBox {{
+                color: {text_col};
+                spacing: 8px;
+            }}
+            QPushButton {{
+                padding: 0 16px;
+                border-radius: 6px;
+            }}
+        """)
+        desc_lbl.setStyleSheet(f"color: {desc_col};")
+        cancel_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {cancel_bg};
+                color: {text_col};
+                border: 1px solid {cancel_border};
+            }}
+            QPushButton:hover {{
+                background-color: {"#2A2F42" if is_dark else "#E4E7EE"};
+            }}
+        """)
+        clear_btn.setStyleSheet("""
+            QPushButton {{
+                background-color: #EF4444;
+                color: #FFFFFF;
+                border: none;
+            }}
+            QPushButton:hover {{
+                background-color: #DC2626;
+            }}
+        """)
+
+    def should_delete_files(self) -> bool:
+        return self._delete_files_cb.isChecked()
 
 
 class HistoryPanel(QWidget):
@@ -44,14 +151,18 @@ class HistoryPanel(QWidget):
 
     redownload_requested = Signal(object)
     status_message = Signal(str)
+    history_cleared = Signal()
 
     def __init__(
         self,
         history_db: HistoryDB,
+        active_paths_provider: Optional[Callable[[], set[str]]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self._db = history_db
+        self._active_paths_provider = active_paths_provider
+        self._is_dark = True
         self._item_widgets: list[HistoryItemWidget] = []
         self._setup_ui()
 
@@ -128,6 +239,14 @@ class HistoryPanel(QWidget):
         self._refresh_btn.setMinimumWidth(90)
         self._refresh_btn.clicked.connect(self.refresh)
         filter_row.addWidget(self._refresh_btn)
+
+        self._clear_all_btn = QPushButton("Clear all")
+        self._clear_all_btn.setIcon(get_svg_icon("trash", color="#EF4444", size=14))
+        self._clear_all_btn.setFixedHeight(36)
+        self._clear_all_btn.setMinimumWidth(95)
+        self._clear_all_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._clear_all_btn.clicked.connect(self._on_clear_all_clicked)
+        filter_row.addWidget(self._clear_all_btn)
 
         layout.addLayout(filter_row)
 
@@ -228,6 +347,11 @@ class HistoryPanel(QWidget):
         if total_count is None:
             total_count = len(entries)
 
+        # Update Clear all button enabled state
+        has_items = self._db.get_count() > 0
+        if hasattr(self, "_clear_all_btn"):
+            self._clear_all_btn.setEnabled(has_items)
+
         if not entries:
             self._empty_label.show()
             if total_count > 0:
@@ -247,7 +371,7 @@ class HistoryPanel(QWidget):
             )
 
         for entry in entries:
-            widget = HistoryItemWidget(entry)
+            widget = HistoryItemWidget(entry, db=self._db)
             widget.redownload_clicked.connect(self._on_redownload)
             widget.remove_clicked.connect(self._on_remove)
             self._item_widgets.append(widget)
@@ -265,18 +389,99 @@ class HistoryPanel(QWidget):
 
     def _on_remove(self, entry_id: int) -> None:
         """Remove a history entry (does not delete the file)."""
+        ThumbnailService.get_instance().invalidate_entry(entry_id)
         self._db.delete_entry(entry_id)
         self.refresh()
         self.status_message.emit("Entry removed from history")
 
+    def _on_clear_all_clicked(self) -> None:
+        """Prompt confirmation and clear all download history with optional file deletion."""
+        total_count = self._db.get_count()
+        if total_count == 0:
+            return
+
+        dialog = ClearHistoryDialog(count=total_count, is_dark=self._is_dark, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        delete_files = dialog.should_delete_files()
+
+        # Retrieve active paths from provider so running/queued downloads are strictly preserved
+        active_paths: set[str] = set()
+        if self._active_paths_provider:
+            try:
+                active_paths = self._active_paths_provider()
+            except Exception as e:
+                logger.warning("Error fetching active paths: %s", e)
+
+        try:
+            entries_deleted, files_deleted = self._db.clear_all(
+                delete_files=delete_files,
+                active_paths=active_paths,
+            )
+            # Invalidate all cached thumbnails
+            ThumbnailService.get_instance().clear_cache()
+
+            # Refresh local UI
+            self.refresh()
+            self._count_label.setText("0 entries")
+            if hasattr(self, "_clear_all_btn"):
+                self._clear_all_btn.setEnabled(False)
+
+            # Signal to refresh Home Recent Downloads
+            self.history_cleared.emit()
+
+            if delete_files:
+                msg = f"History cleared ({files_deleted} file{'s' if files_deleted != 1 else ''} deleted from disk)"
+            else:
+                msg = "History cleared"
+
+            show_toast(self, msg, toast_type="success")
+            self.status_message.emit(msg)
+
+        except Exception as e:
+            logger.error("Failed to clear history: %s", e)
+            show_toast(self, f"Error clearing history: {e}", toast_type="error")
+
     def update_theme(self, theme_name: str) -> None:
         """Update history panel elements for dark/light theme."""
         is_dark = (theme_name == "dark")
+        self._is_dark = is_dark
         count_col = "rgba(235, 235, 245, 0.45)" if is_dark else "#5A6170"
         empty_col = "#666666" if is_dark else "#8A92A2"
         if hasattr(self, "_count_label"):
             self._count_label.setStyleSheet(f"color: {count_col};")
         if hasattr(self, "_empty_label"):
             self._empty_label.setStyleSheet(f"color: {empty_col}; padding: 40px;")
+
+        danger_bg = "rgba(239, 68, 68, 0.10)" if is_dark else "rgba(239, 68, 68, 0.08)"
+        danger_border = "rgba(239, 68, 68, 0.35)" if is_dark else "rgba(239, 68, 68, 0.45)"
+        danger_hover = "rgba(239, 68, 68, 0.20)" if is_dark else "rgba(239, 68, 68, 0.15)"
+        danger_hover_border = "rgba(239, 68, 68, 0.55)" if is_dark else "rgba(239, 68, 68, 0.65)"
+        disabled_col = "rgba(157, 163, 180, 0.35)" if is_dark else "#B8BEC9"
+        disabled_border = "rgba(157, 163, 180, 0.2)" if is_dark else "#DCE0E8"
+
+        if hasattr(self, "_clear_all_btn"):
+            self._clear_all_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {danger_bg};
+                    color: #EF4444;
+                    border: 1px solid {danger_border};
+                    border-radius: 6px;
+                    font-weight: 600;
+                    font-size: 11px;
+                    padding: 0 10px;
+                }}
+                QPushButton:hover {{
+                    background-color: {danger_hover};
+                    border: 1px solid {danger_hover_border};
+                }}
+                QPushButton:disabled {{
+                    background-color: transparent;
+                    color: {disabled_col};
+                    border: 1px solid {disabled_border};
+                }}
+            """)
+
         for widget in self._item_widgets:
             widget.update_theme(is_dark)

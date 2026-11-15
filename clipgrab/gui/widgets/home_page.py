@@ -16,8 +16,8 @@ import os
 import subprocess
 from typing import Optional
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QFont, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 
 from clipgrab.core.logger import get_logger
 from clipgrab.core.platforms import DownloadEngine, detect_platform
+from clipgrab.core.thumbnail_service import ThumbnailService
 from clipgrab.data.history_db import HistoryDB, HistoryEntry
 from clipgrab.gui.icons import get_svg_icon, get_svg_pixmap
 from clipgrab.gui.sections import (
@@ -132,20 +133,34 @@ class RecentDownloadCard(QFrame):
     redownload_clicked = Signal(str)  # url
     open_file_clicked = Signal(str)   # output_path
 
-    def __init__(self, entry: HistoryEntry, is_dark: bool = True, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, entry: HistoryEntry, is_dark: bool = True, db: Optional[HistoryDB] = None, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.entry = entry
+        self._is_dark = is_dark
+        self._db = db
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Fixed)
-        self.setMinimumHeight(54)
+        self.setMinimumHeight(66)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
 
-        # File icon
-        icon_lbl = QLabel("🎬" if not entry.audio_quality or entry.video_quality else "🎵")
-        icon_lbl.setFont(QFont("Segoe UI", 13))
-        layout.addWidget(icon_lbl)
+        # 16:9 Thumbnail (~96x54, rounded 8px)
+        self._thumb_label = QLabel()
+        self._thumb_label.setFixedSize(96, 54)
+        self._thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._thumb_label.setStyleSheet("border-radius: 8px; background: transparent;")
+        layout.addWidget(self._thumb_label, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        pix = ThumbnailService.get_instance().load_thumbnail(
+            entry,
+            QSize(96, 54),
+            self._on_thumbnail_ready,
+            is_dark=self._is_dark,
+            db=self._db,
+        )
+        if not pix.isNull():
+            self._thumb_label.setPixmap(pix)
 
         # Title & metadata
         info_layout = QVBoxLayout()
@@ -190,7 +205,12 @@ class RecentDownloadCard(QFrame):
 
         self.update_theme(is_dark)
 
+    def _on_thumbnail_ready(self, entry_id: int, pixmap: QPixmap) -> None:
+        if self.entry.id == entry_id and hasattr(self, "_thumb_label") and not pixmap.isNull():
+            self._thumb_label.setPixmap(pixmap)
+
     def update_theme(self, is_dark: bool) -> None:
+        self._is_dark = is_dark
         bg = "rgba(28, 28, 36, 0.85)" if is_dark else "#FFFFFF"
         border = "rgba(255, 255, 255, 0.08)" if is_dark else "#DCE0E8"
         hover_bg = "rgba(42, 42, 54, 0.95)" if is_dark else "#F8F9FB"
@@ -203,6 +223,17 @@ class RecentDownloadCard(QFrame):
         )
         self._title_lbl.setStyleSheet(f"color: {t_col};")
         self._meta_lbl.setStyleSheet(f"color: {m_col};")
+
+        if hasattr(self, "entry") and self.entry:
+            pix = ThumbnailService.get_instance().load_thumbnail(
+                self.entry,
+                QSize(96, 54),
+                self._on_thumbnail_ready,
+                is_dark=self._is_dark,
+                db=self._db,
+            )
+            if hasattr(self, "_thumb_label") and not pix.isNull():
+                self._thumb_label.setPixmap(pix)
 
 
 class HomePage(QWidget):
@@ -498,7 +529,12 @@ class HomePage(QWidget):
             return
 
         for entry in entries:
-            card = RecentDownloadCard(entry, is_dark=self._is_dark, parent=self._recent_container_widget)
+            card = RecentDownloadCard(
+                entry,
+                is_dark=self._is_dark,
+                db=self._history_db,
+                parent=self._recent_container_widget,
+            )
             card.redownload_clicked.connect(self._on_redownload_entry)
             card.open_file_clicked.connect(self._on_open_file_entry)
             self._recent_layout.addWidget(card)

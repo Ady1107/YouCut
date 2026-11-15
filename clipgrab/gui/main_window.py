@@ -52,6 +52,7 @@ from clipgrab.gui.theme import (
     apply_theme,
     toggle_theme,
 )
+from clipgrab.core.thumbnail_service import ThumbnailService
 from clipgrab.gui.widgets.history_panel import HistoryPanel
 from clipgrab.gui.widgets.home_page import HomePage
 from clipgrab.gui.widgets.queue_panel import QueuePanel
@@ -146,7 +147,7 @@ class MainWindow(QMainWindow):
         self._facebook_page = SocialDownloadPage("facebook", self._settings)
 
         self._queue_panel = QueuePanel(self._queue_manager)
-        self._history_panel = HistoryPanel(self._history_db)
+        self._history_panel = HistoryPanel(self._history_db, active_paths_provider=self._get_active_download_paths)
         self._settings_panel = SettingsPanel(self._settings, self._update_manager)
 
         # Register pages strictly by section id
@@ -226,9 +227,10 @@ class MainWindow(QMainWindow):
         self._settings_panel.theme_changed.connect(self._on_theme_changed)
         self._settings_panel.settings_changed.connect(self._on_settings_changed)
 
-        # History re-download
+        # History signals
         self._history_panel.redownload_requested.connect(self._on_redownload_requested)
         self._history_panel.status_message.connect(self._status_bar.showMessage)
+        self._history_panel.history_cleared.connect(self._home_page.refresh_recent_downloads)
 
         # Queue panel status
         self._queue_panel.queue_action.connect(self._status_bar.showMessage)
@@ -675,6 +677,11 @@ class MainWindow(QMainWindow):
             total = self._queue_manager.item_count()
             self._sidebar.set_status(f"Downloading {idx} of {total}", state="downloading")
         elif item.status == QueueItemStatus.DONE:
+            thumb_path = ThumbnailService.get_instance().cache_thumbnail_for_completed_item(
+                item_id=item.id,
+                thumbnail_url=item.thumbnail_url,
+                output_path=item.output_path,
+            )
             self._history_db.add_entry(
                 title=item.title,
                 url=item.url,
@@ -685,6 +692,7 @@ class MainWindow(QMainWindow):
                 audio_quality=item.audio_format_label,
                 file_size=item.file_size,
                 thumbnail_url=item.thumbnail_url,
+                thumbnail_path=thumb_path or "",
             )
             show_toast(self, f"Download complete: {item.title}", toast_type="success")
             self._home_page.refresh_recent_downloads()
@@ -711,6 +719,15 @@ class MainWindow(QMainWindow):
             if it.status in (QueueItemStatus.DOWNLOADING, QueueItemStatus.PENDING)
         )
         self._sidebar.set_queue_count(count)
+
+    def _get_active_download_paths(self) -> set[str]:
+        """Collect output paths of currently downloading or pending queue items to prevent deletion."""
+        items = self._queue_manager.get_items()
+        return {
+            os.path.normpath(it.output_path).lower()
+            for it in items
+            if it.output_path and it.status in (QueueItemStatus.DOWNLOADING, QueueItemStatus.PENDING)
+        }
 
     def _on_app_update_available(self, version: str, notes: str, url: str) -> None:
         self._sidebar.set_status("Update available", state="update")

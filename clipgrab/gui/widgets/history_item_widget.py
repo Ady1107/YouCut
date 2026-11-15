@@ -12,8 +12,8 @@ import subprocess
 import sys
 from typing import Optional
 
-from PySide6.QtCore import Signal
-from PySide6.QtGui import QFont
+from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtGui import QFont, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -25,7 +25,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from clipgrab.data.history_db import HistoryEntry
+from clipgrab.core.thumbnail_service import ThumbnailService
+from clipgrab.data.history_db import HistoryDB, HistoryEntry
 from clipgrab.core.logger import get_logger
 
 logger = get_logger("history_item_widget")
@@ -45,20 +46,24 @@ class HistoryItemWidget(QFrame):
     redownload_clicked = Signal(int)
     remove_clicked = Signal(int)
 
-    def __init__(self, entry: HistoryEntry, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, entry: HistoryEntry, db: Optional[HistoryDB] = None, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        self._db = db
+        self._entry = entry
         self._entry_id = entry.id
+        self._is_dark = True
         self.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
         self.setLineWidth(1)
-        self.setMinimumHeight(64)
+        self.setMinimumHeight(88)
         app = QApplication.instance()
-        is_dark = (app.property("current_theme") != "light") if app else True
+        self._is_dark = (app.property("current_theme") != "light") if app else True
         self._setup_ui()
-        self.update_theme(is_dark)
+        self.update_theme(self._is_dark)
         self.update_from_entry(entry)
 
     def update_theme(self, is_dark: bool) -> None:
         """Update history card styles for dark/light theme."""
+        self._is_dark = is_dark
         bg = "#171922" if is_dark else "#FFFFFF"
         border = "rgba(255, 255, 255, 0.07)" if is_dark else "#DCE0E8"
         hover_bg = "#1B1E2B" if is_dark else "#F8F9FB"
@@ -81,11 +86,30 @@ class HistoryItemWidget(QFrame):
         if hasattr(self, "_size_label"):
             self._size_label.setStyleSheet(f"color: {meta_col};")
 
+        # Refresh thumbnail for new theme if needed
+        if hasattr(self, "_entry") and self._entry:
+            pix = ThumbnailService.get_instance().load_thumbnail(
+                self._entry,
+                QSize(128, 72),
+                self._on_thumbnail_ready,
+                is_dark=self._is_dark,
+                db=self._db,
+            )
+            if hasattr(self, "_thumb_label") and not pix.isNull():
+                self._thumb_label.setPixmap(pix)
+
     def _setup_ui(self) -> None:
-        """Set up the history item UI."""
+        """Set up the history item UI with left 16:9 thumbnail, center info, right actions."""
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(12)
+        layout.setSpacing(14)
+
+        # 16:9 thumbnail (~128x72, rounded 8px, cropped to fill)
+        self._thumb_label = QLabel()
+        self._thumb_label.setFixedSize(128, 72)
+        self._thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._thumb_label.setStyleSheet("border-radius: 8px; background: transparent;")
+        layout.addWidget(self._thumb_label, 0, Qt.AlignmentFlag.AlignVCenter)
 
         # Info column
         info_col = QVBoxLayout()
@@ -180,8 +204,20 @@ class HistoryItemWidget(QFrame):
 
     def update_from_entry(self, entry: HistoryEntry) -> None:
         """Update the widget from a HistoryEntry."""
+        self._entry = entry
         self._entry_id = entry.id
         self._output_path = entry.output_path
+
+        # Asynchronously load or retrieve thumbnail
+        pix = ThumbnailService.get_instance().load_thumbnail(
+            entry,
+            QSize(128, 72),
+            self._on_thumbnail_ready,
+            is_dark=self._is_dark,
+            db=self._db,
+        )
+        if hasattr(self, "_thumb_label") and not pix.isNull():
+            self._thumb_label.setPixmap(pix)
 
         self._title_label.setText(entry.title or "Untitled")
 
@@ -295,6 +331,11 @@ class HistoryItemWidget(QFrame):
                 logger.error("Failed to open file location: %s", e)
         elif self._output_path:
             QMessageBox.warning(self, "File Not Found", "The downloaded file could not be found. It may have been moved or deleted.")
+
+    def _on_thumbnail_ready(self, entry_id: int, pixmap: QPixmap) -> None:
+        """Callback invoked on GUI thread when background worker loads thumbnail."""
+        if self._entry_id == entry_id and hasattr(self, "_thumb_label") and not pixmap.isNull():
+            self._thumb_label.setPixmap(pixmap)
 
     @staticmethod
     def _format_size(size_bytes: int) -> str:
