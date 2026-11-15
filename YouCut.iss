@@ -1,6 +1,6 @@
 #define MyAppName "YouCut"
 #ifndef MyAppVersion
-  #define MyAppVersion "1.0.0"
+  #define MyAppVersion "2.0.0"
 #endif
 #define MyAppPublisher "sHUBH"
 #define MyAppExeName "YouCut.exe"
@@ -15,6 +15,8 @@ AppPublisher={#MyAppPublisher}
 DefaultDirName={localappdata}\Programs\{#MyAppName}
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
+CloseApplications=yes
+RestartApplications=yes
 
 ; Per-user install (no UAC / admin prompt required)
 PrivilegesRequired=lowest

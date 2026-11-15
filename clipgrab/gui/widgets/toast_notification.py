@@ -131,6 +131,16 @@ class ToastNotification(QWidget):
         if not parent:
             return
 
+        # Clean up any stale or destroyed toasts
+        valid_toasts = []
+        for t in ToastNotification._active_toasts:
+            try:
+                _ = t.height()
+                valid_toasts.append(t)
+            except (RuntimeError, ReferenceError):
+                pass
+        ToastNotification._active_toasts = valid_toasts
+
         # Calculate position (top-right, below any existing toasts)
         margin = 16
         stack_offset = sum(t.height() + 8 for t in ToastNotification._active_toasts)

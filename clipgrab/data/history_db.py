@@ -22,7 +22,11 @@ logger = get_logger("history_db")
 
 def _get_db_path() -> str:
     """Get the path to the history database file."""
-    db_dir = Path.home() / ".youcut"
+    env_home = os.environ.get("YOUCUT_HOME")
+    if env_home:
+        db_dir = Path(env_home).resolve()
+    else:
+        db_dir = Path.home() / ".youcut"
     db_dir.mkdir(parents=True, exist_ok=True)
     return str(db_dir / "history.db")
 
@@ -42,6 +46,7 @@ class HistoryEntry:
     file_size: int = 0
     downloaded_at: str = ""  # ISO timestamp
     thumbnail_url: str = ""
+    thumbnail_path: str = ""
     file_exists: bool = True  # Computed, not stored
 
 
@@ -84,7 +89,7 @@ class HistoryDB:
             conn.close()
 
     def _init_schema(self) -> None:
-        """Create the downloads table if it doesn't exist."""
+        """Create the downloads table if it doesn't exist, and safely migrate new columns."""
         with self._connect() as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS downloads (
@@ -98,9 +103,16 @@ class HistoryDB:
                     output_path TEXT NOT NULL,
                     file_size INTEGER DEFAULT 0,
                     downloaded_at TEXT DEFAULT (datetime('now', 'localtime')),
-                    thumbnail_url TEXT DEFAULT ''
+                    thumbnail_url TEXT DEFAULT '',
+                    thumbnail_path TEXT DEFAULT ''
                 )
             """)
+
+            # Safe migration: inspect existing columns and add thumbnail_path if missing
+            cols = [row["name"] for row in conn.execute("PRAGMA table_info(downloads)").fetchall()]
+            if "thumbnail_path" not in cols:
+                logger.info("Migrating history schema: adding thumbnail_path column")
+                conn.execute("ALTER TABLE downloads ADD COLUMN thumbnail_path TEXT DEFAULT ''")
 
             # Create indexes for search/filter performance
             conn.execute("""
@@ -125,6 +137,7 @@ class HistoryDB:
         audio_quality: str = "",
         file_size: int = 0,
         thumbnail_url: str = "",
+        thumbnail_path: str = "",
     ) -> int:
         """
         Add a new download to the history.
@@ -139,6 +152,7 @@ class HistoryDB:
             audio_quality: Selected audio quality label.
             file_size: File size in bytes.
             thumbnail_url: URL of the video thumbnail.
+            thumbnail_path: Local path to cached thumbnail image.
 
         Returns:
             The ID of the newly inserted record.
@@ -148,8 +162,8 @@ class HistoryDB:
                 """
                 INSERT INTO downloads
                     (title, url, start_time, end_time, video_quality, audio_quality,
-                     output_path, file_size, thumbnail_url)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     output_path, file_size, thumbnail_url, thumbnail_path)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     title,
@@ -161,6 +175,7 @@ class HistoryDB:
                     output_path,
                     file_size,
                     thumbnail_url,
+                    thumbnail_path,
                 ),
             )
             entry_id = cursor.lastrowid or 0
@@ -264,9 +279,28 @@ class HistoryDB:
 
         return [self._row_to_entry(row) for row in rows]
 
+    def update_thumbnail_path(self, entry_id: int, thumbnail_path: str) -> bool:
+        """
+        Update the cached thumbnail path for a specific entry.
+
+        Args:
+            entry_id: The database ID of the entry.
+            thumbnail_path: Local filesystem path to the cached thumbnail JPEG.
+
+        Returns:
+            True if updated, False otherwise.
+        """
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE downloads SET thumbnail_path = ? WHERE id = ?",
+                (thumbnail_path, entry_id),
+            )
+            return cursor.rowcount > 0
+
     def delete_entry(self, entry_id: int) -> bool:
         """
-        Remove a history entry (does NOT delete the actual file).
+        Remove a history entry and delete its cached thumbnail file if present.
+        (Does NOT delete the downloaded video/audio file).
 
         Args:
             entry_id: The database ID of the entry to remove.
@@ -274,6 +308,14 @@ class HistoryDB:
         Returns:
             True if the entry was deleted, False if not found.
         """
+        entry = self.get_entry(entry_id)
+        if entry and entry.thumbnail_path and os.path.isfile(entry.thumbnail_path):
+            try:
+                os.remove(entry.thumbnail_path)
+                logger.info("Deleted cached thumbnail file for entry %d: %s", entry_id, entry.thumbnail_path)
+            except Exception as e:
+                logger.warning("Could not delete thumbnail %s: %s", entry.thumbnail_path, e)
+
         with self._connect() as conn:
             cursor = conn.execute(
                 "DELETE FROM downloads WHERE id = ?", (entry_id,)
@@ -284,6 +326,67 @@ class HistoryDB:
             logger.info("History entry deleted: %d", entry_id)
         return deleted
 
+    def clear_all(
+        self,
+        delete_files: bool = False,
+        active_paths: Optional[set[str]] = None,
+    ) -> tuple[int, int]:
+        """
+        Remove all history records, delete cached thumbnail files, and optionally
+        delete downloaded media files from disk. VACUUM the database.
+
+        Args:
+            delete_files: When True, deletes existing downloaded files from disk.
+            active_paths: Set of file paths actively in the download queue to preserve.
+
+        Returns:
+            Tuple of (entries_deleted_count, files_deleted_count).
+        """
+        active_normalized = {os.path.normpath(p).lower() for p in (active_paths or set()) if p}
+        entries = self.get_all(limit=100000)
+        entries_count = len(entries)
+        files_deleted = 0
+
+        # 1. Optionally delete downloaded files from disk (ignoring missing ones)
+        if delete_files:
+            for entry in entries:
+                if entry.output_path:
+                    norm = os.path.normpath(entry.output_path).lower()
+                    if norm not in active_normalized and os.path.isfile(entry.output_path):
+                        try:
+                            os.remove(entry.output_path)
+                            files_deleted += 1
+                        except Exception as e:
+                            logger.warning("Failed to delete downloaded file %s: %s", entry.output_path, e)
+
+        # 2. Delete all cached thumbnails
+        for entry in entries:
+            if entry.thumbnail_path and os.path.isfile(entry.thumbnail_path):
+                try:
+                    os.remove(entry.thumbnail_path)
+                except Exception as e:
+                    logger.warning("Failed to delete thumbnail %s: %s", entry.thumbnail_path, e)
+
+        # 3. Clear database rows
+        with self._connect() as conn:
+            conn.execute("DELETE FROM downloads")
+            conn.execute("DELETE FROM sqlite_sequence WHERE name='downloads'")
+
+        # 4. Run VACUUM outside active transaction in autocommit mode
+        try:
+            conn_vac = sqlite3.connect(self._db_path, isolation_level=None)
+            conn_vac.execute("VACUUM")
+            conn_vac.close()
+        except Exception as e:
+            logger.warning("VACUUM failed: %s", e)
+
+        logger.info(
+            "History cleared: %d entries removed, %d files deleted from disk",
+            entries_count,
+            files_deleted,
+        )
+        return entries_count, files_deleted
+
     def get_count(self) -> int:
         """Get the total number of history entries."""
         with self._connect() as conn:
@@ -292,6 +395,7 @@ class HistoryDB:
 
     def _row_to_entry(self, row: sqlite3.Row) -> HistoryEntry:
         """Convert a database row to a HistoryEntry, checking if file still exists."""
+        keys = row.keys()
         entry = HistoryEntry(
             id=row["id"],
             title=row["title"],
@@ -304,6 +408,7 @@ class HistoryDB:
             file_size=row["file_size"] or 0,
             downloaded_at=row["downloaded_at"] or "",
             thumbnail_url=row["thumbnail_url"] or "",
+            thumbnail_path=row["thumbnail_path"] if "thumbnail_path" in keys and row["thumbnail_path"] else "",
         )
 
         # Check if the downloaded file still exists

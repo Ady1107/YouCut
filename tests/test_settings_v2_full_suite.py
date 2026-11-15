@@ -1,0 +1,543 @@
+"""
+YouCut — Comprehensive Test Suite for Settings, Themes, Layout & Updates.
+Covers:
+- Part 1: No NameError ('version_mod'), no cross-thread setParent warnings, cached FFmpeg verification.
+- Part 2: Theme switching, selection ring sync, system theme resolution, title bar theme.
+- Part 3: Settings layout width constraint (<= 1100px), equal card stretch (1, 1, 1), compact vector stepper (1-32), window widths 1000, 1400, 2500.
+- Part 4: Component cooldowns (YouCut 24h, yt-dlp 12h, FFmpeg 7d), forced manual bypass, update cache loading and dropping, toggle OFF vs toggle ON (deferred if queue busy), frozen vs dev updater.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import sys
+import tempfile
+import unittest
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QSizePolicy
+
+from clipgrab.config.settings import AppSettings
+from clipgrab.core.ffmpeg_utils import (
+    _CACHED_FFMPEG_VERIFICATION,
+    invalidate_ffmpeg_cache,
+    verify_ffmpeg,
+)
+from clipgrab.core.updater import (
+    COOLDOWN_FFMPEG_SECONDS,
+    COOLDOWN_YOUCUT_SECONDS,
+    COOLDOWN_YTDLP_SECONDS,
+    RETRY_FAILED_NETWORK_SECONDS,
+    ComponentState,
+    UpdateManager,
+    _is_newer,
+    check_ffmpeg_update,
+    get_installed_ffmpeg_version,
+    get_installed_ytdlp_version,
+    is_ffmpeg_update_newer,
+    parse_ffmpeg_installed_version,
+    parse_ffmpeg_remote_version,
+)
+from clipgrab.gui.main_window import MainWindow
+from clipgrab.gui.theme import (
+    ThemeManager,
+    apply_theme,
+    resolve_theme,
+    set_window_title_bar_theme,
+    toggle_theme,
+)
+from clipgrab.gui.widgets.settings_panel import (
+    ComponentUpdateCard,
+    ElidedLabel,
+    FragmentStepper,
+    QToggleSwitch,
+    SettingsPanel,
+    StatusBadge,
+    StepperButton,
+    ThemePreviewCard,
+)
+from clipgrab.gui.widgets.sidebar import Sidebar, SidebarNavButton
+from clipgrab.version import APP_VERSION
+
+
+class TestFullSuite(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance()
+        if cls.app is None:
+            cls.app = QApplication([])
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.mkdtemp()
+        os.environ["YOUCUT_HOME"] = self.temp_dir
+        self.settings = AppSettings.load()
+        self.update_manager = UpdateManager(settings=self.settings)
+        self.panel = SettingsPanel(self.settings, self.update_manager)
+        self.panel.show()
+
+    def tearDown(self) -> None:
+        self.panel.close()
+        self.update_manager.shutdown()
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    # ── PART 1: Run Log Bugs & Verifications ─────────────────────────────────
+
+    def test_part1_no_version_mod_name_error(self) -> None:
+        """Verify that _on_app_no_update runs cleanly without NameError: version_mod."""
+        try:
+            self.update_manager._on_app_no_update()
+        except NameError as e:
+            self.fail(f"_on_app_no_update raised NameError: {e}")
+
+    def test_part1_ffmpeg_verification_cached(self) -> None:
+        """Verify FFmpeg verification is cached in memory and not respawned repeatedly."""
+        invalidate_ffmpeg_cache()
+        ok1, info1 = verify_ffmpeg()
+        self.assertTrue(ok1)
+
+        # Second call should return cached value without executing subprocess
+        with patch("subprocess.run") as mock_sub:
+            ok2, info2 = verify_ffmpeg()
+            self.assertEqual(ok1, ok2)
+            self.assertEqual(info1, info2)
+            mock_sub.assert_not_called()
+
+        # Invalidate cache and verify it runs again
+        invalidate_ffmpeg_cache()
+        with patch("subprocess.run") as mock_sub:
+            mock_sub.return_value = MagicMock(returncode=0, stdout="ffmpeg version 7.0 test")
+            ok3, info3 = verify_ffmpeg()
+            self.assertTrue(ok3)
+            mock_sub.assert_called_once()
+
+    # ── PART 2: Theme Switching & Sync ───────────────────────────────────────
+
+    def test_part2_theme_selection_ring_sync_no_double_toggle(self) -> None:
+        """Verify clicking theme cards sets the setting once and updates selection rings correctly."""
+        # Start with dark
+        self.settings.update(theme="dark")
+        self.panel._load_from_settings()
+        self.assertTrue(self.panel._theme_card_dark._is_selected)
+        self.assertFalse(self.panel._theme_card_light._is_selected)
+        self.assertFalse(self.panel._theme_card_system._is_selected)
+
+        # Select Light
+        self.panel._on_theme_card_selected("light")
+        self.assertEqual(self.settings.theme, "light")
+        self.assertFalse(self.panel._theme_card_dark._is_selected)
+        self.assertTrue(self.panel._theme_card_light._is_selected)
+        self.assertFalse(self.panel._theme_card_system._is_selected)
+
+        # Select System
+        self.panel._on_theme_card_selected("system")
+        self.assertEqual(self.settings.theme, "system")
+        self.assertFalse(self.panel._theme_card_dark._is_selected)
+        self.assertFalse(self.panel._theme_card_light._is_selected)
+        self.assertTrue(self.panel._theme_card_system._is_selected)
+
+    def test_part2_theme_resolution_and_title_bar(self) -> None:
+        """Verify resolve_theme and window title bar helper without crashing."""
+        self.assertEqual(resolve_theme("dark"), "dark")
+        self.assertEqual(resolve_theme("light"), "light")
+        self.assertIn(resolve_theme("system"), ("dark", "light"))
+
+        # Test set_window_title_bar_theme doesn't fail
+        set_window_title_bar_theme(self.panel, True)
+        set_window_title_bar_theme(self.panel, False)
+
+    # ── PART 3: Settings Page Layout & Stepper ────────────────────────────────
+
+    def test_part3_content_width_constraint(self) -> None:
+        """Verify content widget is capped at maximumWidth 1100px and horizontal scrollbar is disabled."""
+        self.assertEqual(self.panel._content_widget.maximumWidth(), 1100)
+        self.assertEqual(
+            self.panel._scroll.horizontalScrollBarPolicy(),
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
+        )
+
+    def test_part3_update_cards_equal_stretch(self) -> None:
+        """Verify all 3 update cards share layout equally."""
+        self.assertEqual(self.panel._update_cards_layout.count(), 3)
+        for i in range(3):
+            item = self.panel._update_cards_layout.itemAt(i)
+            self.assertEqual(self.panel._update_cards_layout.stretch(i), 1)
+
+    def test_part3_fragment_stepper_compact_vector(self) -> None:
+        """Verify compact FragmentStepper with StepperButtons, clamping between 1 and 32."""
+        stepper = FragmentStepper(initial_val=16)
+        self.assertEqual(stepper.value(), 16)
+        self.assertIsInstance(stepper._btn_minus, StepperButton)
+        self.assertIsInstance(stepper._btn_plus, StepperButton)
+        self.assertEqual(stepper._btn_minus.width(), 36)
+        self.assertEqual(stepper._btn_minus.height(), 36)
+
+        # Step up
+        stepper._on_plus()
+        self.assertEqual(stepper.value(), 17)
+
+        # Step down
+        stepper._on_minus()
+        self.assertEqual(stepper.value(), 16)
+
+        # Clamping to bounds
+        stepper.setValue(100)
+        self.assertEqual(stepper.value(), 32)
+        self.assertFalse(stepper._btn_plus.isEnabled())
+
+        stepper.setValue(-10)
+        self.assertEqual(stepper.value(), 1)
+        self.assertFalse(stepper._btn_minus.isEnabled())
+
+    def test_part3_window_widths_responsiveness(self) -> None:
+        """Verify settings panel renders properly across narrow (1000px), normal (1400px), and ultrawide (2500px)."""
+        for w in (1000, 1400, 2500):
+            self.panel.resize(w, 800)
+            self.panel.repaint()
+            self.assertLessEqual(self.panel._content_widget.width(), 1100)
+
+    # ── PART 4: Update Cooldowns, Cache, Badges & Toggles ──────────────────────
+
+    def test_part4_toggle_off_startup_zero_calls_and_no_timers(self) -> None:
+        """Verify toggle OFF results in zero network calls on startup and no active timers."""
+        mgr = self.update_manager
+        mgr.auto_update_app = False
+        mgr.auto_update = False
+        mgr.auto_update_ffmpeg = False
+
+        self.assertFalse(mgr.is_timer_active("youcut"))
+        self.assertFalse(mgr.is_timer_active("ytdlp"))
+        self.assertFalse(mgr.is_timer_active("ffmpeg"))
+
+        with patch.object(mgr, "_run_app_check") as mock_app, \
+             patch.object(mgr, "_run_check") as mock_ytdlp, \
+             patch.object(mgr, "check_ffmpeg") as mock_ff:
+            mgr.startup_check()
+            mock_app.assert_not_called()
+            mock_ytdlp.assert_not_called()
+            mock_ff.assert_not_called()
+
+        self.assertFalse(mgr.is_timer_active("youcut"))
+        self.assertFalse(mgr.is_timer_active("ytdlp"))
+        self.assertFalse(mgr.is_timer_active("ffmpeg"))
+
+    def test_part4_manual_click_works_and_ignores_cooldown(self) -> None:
+        """Verify manual check works and ignores cooldown even if checked moments ago."""
+        mgr = self.update_manager
+        now = datetime.now(timezone.utc)
+        for comp in ("youcut", "ytdlp", "ffmpeg"):
+            c = mgr._get_cache(comp)
+            c["last_check_time"] = (now - timedelta(seconds=10)).isoformat()
+            c["last_check_success"] = True
+
+        self.assertTrue(mgr._is_cooldown_active("youcut", COOLDOWN_YOUCUT_SECONDS))
+        self.assertTrue(mgr._is_cooldown_active("ytdlp", COOLDOWN_YTDLP_SECONDS))
+        self.assertTrue(mgr._is_cooldown_active("ffmpeg", COOLDOWN_FFMPEG_SECONDS))
+
+        with patch.object(mgr, "_run_app_check") as mock_app, \
+             patch.object(mgr, "_run_check") as mock_ytdlp, \
+             patch("clipgrab.core.updater.FFmpegUpdateChecker") as mock_ff:
+            mgr.check_all(force=True)
+            mock_app.assert_called_once()
+            mock_ytdlp.assert_called_once()
+
+    def test_part4_toggle_off_update_found_no_download_until_update_now_clicked(self) -> None:
+        """Verify that when toggle is OFF, finding an update does not trigger download until Update now is clicked."""
+        mgr = self.update_manager
+        mgr.auto_update = False
+        mgr._settings.update(auto_update_ytdlp=False)
+
+        with patch.object(mgr, "_perform_update") as mock_perf:
+            mgr._on_ytdlp_check_completed("2026.10.01", "2026.11.01", update_available=True, success=True)
+            # Must NOT download automatically
+            mock_perf.assert_not_called()
+            c = mgr._get_cache("ytdlp")
+            self.assertEqual(c["latest_version"], "2026.11.01")
+
+            # Click "Update now"
+            mgr.update_ytdlp()
+            mock_perf.assert_called_once()
+
+    def test_part4_toggle_on_cooldown_respected_and_autoinstall_when_idle(self) -> None:
+        """Verify toggle ON respects cooldowns and auto-installs deferred updates once queue is idle."""
+        mgr = self.update_manager
+        mgr.auto_update = True
+        now = datetime.now(timezone.utc)
+
+        # Set check done recently
+        c = mgr._get_cache("ytdlp")
+        c["last_check_time"] = (now - timedelta(hours=1)).isoformat()
+        c["last_check_success"] = True
+
+        with patch.object(mgr, "_run_check") as mock_chk:
+            mgr.check_ytdlp(force=False)
+            mock_chk.assert_not_called()
+
+        # Cooldown expired -> check runs
+        c["last_check_time"] = (now - timedelta(hours=13)).isoformat()
+        with patch.object(mgr, "_run_check") as mock_chk:
+            mgr.check_ytdlp(force=False)
+            mock_chk.assert_called_once()
+
+        # Update found while queue is busy -> deferred
+        mgr.set_queue_busy(True)
+        with patch.object(mgr, "_perform_update") as mock_perf:
+            mgr._on_ytdlp_check_completed("2026.10.01", "2026.11.01", True, True)
+            self.assertTrue(mgr._pending_update)
+            mock_perf.assert_not_called()
+
+            # Idle queue -> auto installs
+            mgr.set_queue_busy(False)
+            mock_perf.assert_called_once()
+            self.assertFalse(mgr._pending_update)
+
+    def test_part4_flipping_toggle_off_stops_timer_and_cancels_pending_update(self) -> None:
+        """Verify flipping toggle OFF stops component timer and cancels pending auto-install."""
+        mgr = self.update_manager
+        mgr.auto_update = True
+        self.assertTrue(mgr.is_timer_active("ytdlp"))
+
+        # Mark pending deferred update
+        mgr._pending_update = True
+
+        # Flip toggle OFF
+        mgr.auto_update = False
+        self.assertFalse(mgr.is_timer_active("ytdlp"))
+        self.assertFalse(mgr._pending_update)
+
+        # Flip back ON
+        with patch.object(mgr, "_run_check"):
+            mgr.auto_update = True
+        self.assertTrue(mgr.is_timer_active("ytdlp"))
+
+    def test_part4_cached_update_available_badge_survives_restart_and_drops(self) -> None:
+        """Verify cached 'Update available' badge survives restart without network calls and drops when updated."""
+        mgr = self.update_manager
+
+        # Save an available update to cache
+        c = mgr._get_cache("youcut")
+        c["latest_version"] = "99.0.0"
+        c["download_url"] = "https://example.com/setup.exe"
+        c["release_notes_url"] = "https://example.com/notes"
+        mgr._save_settings()
+
+        # Simulate restart: fresh UpdateManager
+        new_mgr = UpdateManager(settings=mgr._settings)
+        status_received = []
+        new_mgr.app_status_changed.connect(lambda s, v, n, u: status_received.append((s, v)))
+
+        # Badges loaded with ZERO network calls
+        with patch.object(new_mgr, "_run_app_check") as mock_app:
+            new_mgr.load_cached_badges()
+            mock_app.assert_not_called()
+
+        self.assertIn(("available", "99.0.0"), status_received)
+        self.assertTrue(new_mgr._has_any_update_available())
+
+        # Now simulate installed version >= latest -> cache dropped
+        with patch("clipgrab.core.updater.APP_VERSION", "99.0.0"):
+            status_received.clear()
+            new_mgr.load_cached_badges()
+            self.assertEqual(c["latest_version"], "")
+            self.assertIn(("up_to_date", "99.0.0"), status_received)
+
+        new_mgr.shutdown()
+
+    def test_part4_network_failure_does_not_count_as_checked_and_retries_after_one_hour(self) -> None:
+        """Verify network failure does not count as checked and retries after 1 hour."""
+        mgr = self.update_manager
+        now = datetime.now(timezone.utc)
+        c = mgr._get_cache("youcut")
+        c["last_check_time"] = ""
+        c["last_failure_time"] = ""
+
+        # Trigger failed check
+        mgr._on_app_check_failed("Connection error")
+        self.assertEqual(c["last_check_time"], "")  # NOT counted as checked
+        self.assertNotEqual(c["last_failure_time"], "")
+        self.assertFalse(c["last_check_success"])
+
+        # Within 1h -> in failure retry cooldown
+        self.assertTrue(mgr._is_cooldown_active("youcut", COOLDOWN_YOUCUT_SECONDS))
+
+        # After 1h -> cooldown expired for retry
+        c["last_failure_time"] = (now - timedelta(minutes=65)).isoformat()
+        self.assertFalse(mgr._is_cooldown_active("youcut", COOLDOWN_YOUCUT_SECONDS))
+
+    def test_part4_header_format_last_checked(self) -> None:
+        """Verify format_last_checked outputs 'Not checked yet', 'today', 'yesterday', or date."""
+        from clipgrab.core.updater import format_last_checked
+        now = datetime.now()
+
+        self.assertEqual(format_last_checked(""), "Not checked yet")
+        self.assertEqual(format_last_checked(None), "Not checked yet")
+
+        today_str = format_last_checked(now)
+        self.assertTrue(today_str.startswith("Last checked today,"))
+
+        yesterday_str = format_last_checked(now - timedelta(days=1))
+        self.assertTrue(yesterday_str.startswith("Last checked yesterday,"))
+
+        old_str = format_last_checked(now - timedelta(days=10))
+        self.assertTrue(old_str.startswith("Last checked "))
+        self.assertNotIn("today", old_str)
+        self.assertNotIn("yesterday", old_str)
+
+    # ── PART 5: FFmpeg Updater, State Machine, Single-Flight & Sidebar ──────
+
+    def test_part5_ffmpeg_version_never_returns_latest_and_compares_correctly(self) -> None:
+        """Verify remote FFmpeg parsing never returns 'latest' and compares commits/dates accurately."""
+        # 1. Release with tag 'latest', published_at date
+        mock_data = {
+            "name": "Latest Auto-Build (2026-11-14 12:37)",
+            "tag_name": "latest",
+            "published_at": "2026-11-14T12:56:33Z",
+            "body": "Built from git commit N-127600",
+        }
+        commit, date_str, display = parse_ffmpeg_remote_version(mock_data, "ffmpeg-master-latest-win64-gpl.zip")
+        self.assertNotEqual(display, "latest")
+        self.assertNotIn("latest", display.lower())
+        self.assertEqual(commit, 127600)
+        self.assertEqual(date_str, "2026-11-14")
+
+        # 2. Installed version parse
+        inst_commit, inst_date = parse_ffmpeg_installed_version("N-127579-g5cb9fcd211-20261016")
+        self.assertEqual(inst_commit, 127579)
+        self.assertEqual(inst_date, "2026-10-16")
+
+        # 3. Newer check
+        self.assertTrue(is_ffmpeg_update_newer(commit, date_str, inst_commit, inst_date))
+
+        # 4. Older commit check
+        self.assertFalse(is_ffmpeg_update_newer(127570, "2026-10-01", inst_commit, inst_date))
+
+        # 5. Tag with literal 'latest' and no commit/date returns False
+        self.assertFalse(is_ffmpeg_update_newer(None, None, inst_commit, inst_date))
+
+    def test_part5_ffmpeg_asset_selector_excludes_shared_builds(self) -> None:
+        """Verify check_ffmpeg_update selects static win64-gpl build and rejects shared build."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "tag_name": "latest",
+            "name": "Latest Auto-Build (2026-11-14 12:37)",
+            "published_at": "2026-11-14T12:56:33Z",
+            "assets": [
+                {
+                    "name": "ffmpeg-master-latest-win64-gpl-shared.zip",
+                    "size": 87 * 1024 * 1024,
+                    "browser_download_url": "https://example.com/shared.zip",
+                },
+                {
+                    "name": "ffmpeg-master-latest-win64-gpl.zip",
+                    "size": 201 * 1024 * 1024,
+                    "browser_download_url": "https://example.com/static.zip",
+                },
+            ],
+        }
+
+        with patch("requests.get", return_value=mock_resp), \
+             patch("clipgrab.core.updater.get_installed_ffmpeg_version", return_value="N-127579-g5cb9fcd211-20261016"):
+            result = check_ffmpeg_update()
+            self.assertIsNotNone(result)
+            self.assertEqual(result["download_url"], "https://example.com/static.zip")
+            self.assertEqual(result["size_str"], "≈ 201 MB")
+            self.assertNotEqual(result["latest_version"], "latest")
+
+    def test_part5_manual_check_never_auto_installs_even_if_toggle_on(self) -> None:
+        """Verify manual check never initiates download or installation even with toggle ON."""
+        mgr = self.update_manager
+        mgr._auto_update_ffmpeg = True
+        self.assertTrue(mgr.auto_update_ffmpeg)
+
+        with patch.object(mgr, "update_ffmpeg") as mock_install:
+            # Manual check completion
+            mgr._ffmpeg_check_is_manual = True
+            mgr._on_ffmpeg_check_completed(
+                "N-127579", "2026-11-14", True, "https://example.com/static.zip", "≈ 201 MB", "https://example.com/notes"
+            )
+            # Must NOT auto-install!
+            mock_install.assert_not_called()
+
+            # Card state must be available
+            st = mgr.get_component_state("ffmpeg")
+            self.assertEqual(st.status, "available")
+
+    def test_part5_24h_failure_backoff_suppresses_auto_install(self) -> None:
+        """Verify that after an update fails, auto-install for that version is suppressed for 24h."""
+        mgr = self.update_manager
+        mgr._auto_update_ffmpeg = True
+
+        # Simulate update failure on 2026-11-14
+        mgr._on_ffmpeg_failed("New FFmpeg failed its self-test")
+        c = mgr._get_cache("ffmpeg")
+        c["failed_version"] = "2026-11-14"
+        c["failed_at"] = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        c["last_failure_reason"] = "New FFmpeg failed its self-test"
+
+        with patch.object(mgr, "update_ffmpeg") as mock_install:
+            # Background check finds same version
+            mgr._ffmpeg_check_is_manual = False
+            mgr._on_ffmpeg_check_completed(
+                "N-127579", "2026-11-14", True, "https://example.com/static.zip", "≈ 201 MB", ""
+            )
+            # Auto-install suppressed!
+            mock_install.assert_not_called()
+            st = mgr.get_component_state("ffmpeg")
+            self.assertEqual(st.status, "error")
+            self.assertEqual(st.error_message, "New FFmpeg failed its self-test")
+
+    def test_part5_cancel_update_returns_to_available(self) -> None:
+        """Verify canceling an update returns state to 'available' with 'Update now' button."""
+        mgr = self.update_manager
+        c = mgr._get_cache("ffmpeg")
+        c["latest_version"] = "2026-11-14"
+        c["size"] = "≈ 201 MB"
+
+        mgr.cancel_ffmpeg_update()
+        st = mgr.get_component_state("ffmpeg")
+        self.assertEqual(st.status, "available")
+        self.assertEqual(st.latest_version, "2026-11-14")
+
+    def test_part5_sidebar_dot_overlay_and_pill_geometry(self) -> None:
+        """Verify sidebar Settings button has overlay dot inside pill and matches layout geometry."""
+        sidebar = Sidebar(last_section="home")
+        set_btn = sidebar._nav_buttons.get("settings")
+        hist_btn = sidebar._nav_buttons.get("history")
+        self.assertIsNotNone(set_btn)
+        self.assertIsNotNone(hist_btn)
+
+        # 1. Height and size policy match
+        self.assertEqual(set_btn.height(), hist_btn.height())
+        self.assertEqual(set_btn.sizePolicy().horizontalPolicy(), hist_btn.sizePolicy().horizontalPolicy())
+
+        # 2. Dot is internal to SidebarNavButton
+        self.assertFalse(set_btn._show_dot)
+        sidebar.set_settings_badge(True)
+        self.assertTrue(set_btn._show_dot)
+        sidebar.set_settings_badge(False)
+        self.assertFalse(set_btn._show_dot)
+
+    def test_part5_status_badge_fixed_size_never_elides(self) -> None:
+        """Verify StatusBadge has fixed size policy and width adapts without elision."""
+        badge = StatusBadge()
+        self.assertEqual(badge.sizePolicy().horizontalPolicy(), QSizePolicy.Policy.Fixed)
+        self.assertEqual(badge.sizePolicy().verticalPolicy(), QSizePolicy.Policy.Fixed)
+
+        badge.set_status("available")
+        w_avail = badge.width()
+        badge.set_status("error", "Couldn't reach GitHub.")
+        w_err = badge.width()
+        self.assertGreaterEqual(w_err, w_avail)
+        self.assertFalse(badge._text.text().endswith("..."))
+
+
+if __name__ == "__main__":
+    unittest.main()

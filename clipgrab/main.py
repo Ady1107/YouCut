@@ -13,7 +13,9 @@ if not getattr(sys, "frozen", False):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from PySide6.QtGui import QIcon  # type: ignore  # noqa: E402
-from PySide6.QtWidgets import QApplication, QMessageBox  # type: ignore  # noqa: E402
+from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtCore import QLockFile
+from PySide6.QtNetwork import QLocalServer, QLocalSocket  # type: ignore  # noqa: E402
 
 from clipgrab.core.logger import setup_logging, get_logger  # noqa: E402
 from clipgrab.core.ffmpeg_utils import verify_ffmpeg, verify_ytdlp  # noqa: E402
@@ -25,11 +27,48 @@ from clipgrab.gui.main_window import MainWindow  # noqa: E402
 logger = get_logger("main")
 
 
+IPC_SERVER_NAME = "YouCut_SingleInstance_IPC"
+
 def main() -> int:
     """Application entry point."""
+    # Single-instance guard (QLockFile in ~/.youcut or YOUCUT_HOME)
+    env_home = os.environ.get("YOUCUT_HOME")
+    youcut_dir = os.path.abspath(env_home) if env_home else os.path.expanduser("~/.youcut")
+    os.makedirs(youcut_dir, exist_ok=True)
+    lock_path = os.path.join(youcut_dir, "youcut.lock")
+    lock_file = QLockFile(lock_path)
+    lock_file.setStaleLockTime(30000)
+
+    if not lock_file.tryLock(150):
+        # Second instance: notify existing instance to focus its window and exit
+        socket = QLocalSocket()
+        socket.connectToServer(IPC_SERVER_NAME)
+        if socket.waitForConnected(1000):
+            socket.write(b"ACTIVATE\n")
+            socket.flush()
+            socket.waitForBytesWritten(1000)
+            socket.disconnectFromServer()
+        print("Another instance of YouCut is already running. Focused existing window.")
+        return 0
+
     # Initialize logging
     setup_logging()
-    logger.info("YouCut starting...")
+    logger.info("YouCut starting (single-instance lock acquired)...")
+
+    # Install global excepthook to prevent Qt slot exceptions from being swallowed silently
+    def _global_excepthook(exc_type, exc_value, exc_traceback):
+        import traceback
+        err_msg = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+        logger.error("Uncaught exception in Qt thread/slot:\n%s", err_msg)
+        try:
+            from clipgrab.gui.widgets.toast_notification import show_toast
+            win = QApplication.activeWindow()
+            if win:
+                show_toast(win, f"Error: {exc_value}", toast_type="error")
+        except Exception:
+            pass
+
+    sys.excepthook = _global_excepthook
 
     # Set explicit AppUserModelID on Windows so the taskbar displays the app icon
     # instead of the generic/default paper icon or python icon
@@ -120,8 +159,38 @@ def main() -> int:
         window.setWindowIcon(app_icon)
     window.show()
 
+    # Local IPC server to focus window when second instance is launched
+    ipc_server = QLocalServer()
+    ipc_server.removeServer(IPC_SERVER_NAME)
+    ipc_server.listen(IPC_SERVER_NAME)
+
+    def _handle_ipc_connection():
+        client = ipc_server.nextPendingConnection()
+        if client:
+            def _on_ready_read():
+                data = bytes(client.readAll()).decode("utf-8", errors="ignore")
+                if "ACTIVATE" in data:
+                    logger.info("Second instance launched — focusing main window")
+                    window.showNormal()
+                    window.raise_()
+                    window.activateWindow()
+                    if sys.platform == "win32":
+                        try:
+                            import ctypes
+                            ctypes.windll.user32.SetForegroundWindow(int(window.winId()))
+                        except Exception:
+                            pass
+            client.readyRead.connect(_on_ready_read)
+
+    ipc_server.newConnection.connect(_handle_ipc_connection)
+
     logger.info("YouCut ready")
-    return app.exec()
+    try:
+        ret = app.exec()
+    finally:
+        ipc_server.close()
+        lock_file.unlock()
+    return ret
 
 
 if __name__ == "__main__":

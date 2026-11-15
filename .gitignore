@@ -14,6 +14,8 @@ eggs/
 .eggs/
 *.egg-info/
 *.egg
+*.zip
+SHA256SUMS.txt
 
 # PyInstaller
 # Keep clipgrab/build.spec tracked!
@@ -24,11 +26,17 @@ eggs/
 clipgrab/assets/*.exe
 *.exe
 
-# User runtime data & databases
+# User runtime data & databases & secrets
 .youcut/
 *.db
 *.sqlite3
 *.log
+config.json
+.env
+.env.*
+*.secret
+*.key
+*.pem
 
 # Media files & temporary download fragments
 *.mp4

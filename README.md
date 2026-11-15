@@ -20,6 +20,7 @@ A modern desktop application for downloading and clipping YouTube videos with pr
 - **yt-dlp Auto-Update**: Background update engine with persistent self-update capability
 - **Software Update Alerts**: Integrated GitHub version checking with in-app download banner
 - **Modern UI & Theming**: Polished dark and light themes with custom accents and toast alerts
+- **Content Scope**: Supports public videos across YouTube, Instagram, and Facebook (login-required or private content is not supported)
 - **Clipboard Detection**: Auto-detects YouTube URLs from your clipboard on launch
 
 ---
