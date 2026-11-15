@@ -43,6 +43,7 @@ In `clipgrab/version.py`, update the version string:
 ```python
 APP_VERSION = "1.0.1"
 ```
+Every release must also update version.json in the repo root, because pre-2.0.0 installs read it.
 
 #### Step 2: Commit, Tag, and Push
 ```powershell

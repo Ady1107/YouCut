@@ -1,0 +1,5 @@
+{
+  "version": "2.0.0",
+  "release_notes": "YouCut v2.0.0\n- New Settings page with update cards for YouCut, yt-dlp and FFmpeg\n- Multi-platform downloads: YouTube, Instagram and Facebook\n- History thumbnails and a Clear all button\n- Smarter updates: manual or automatic, your choice\n- Dark and light theme fixes\n- Private or login-required content is not supported",
+  "download_url": "https://github.com/Ady1107/YouCut/releases/download/v2.0.0/YouCut-Setup-v2.0.0.exe"
+}
