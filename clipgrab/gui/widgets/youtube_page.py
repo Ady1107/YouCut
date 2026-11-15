@@ -25,7 +25,7 @@ import time
 from typing import Optional, cast
 
 import requests
-from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QThread, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QThread, QTimer, QUrl, Signal, Slot, QMetaObject, Q_ARG
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -2562,15 +2562,26 @@ class YouTubePage(QWidget):
                 if resp.status_code == 200:
                     with open(cache_path, "wb") as f:
                         f.write(resp.content)
-                    pix = QPixmap(cache_path)
-                    if not pix.isNull():
-                        QTimer.singleShot(0, lambda: self.set_thumbnail_preview(pix))
+                    QMetaObject.invokeMethod(
+                        self,
+                        "_on_thumbnail_file_cached",
+                        Qt.ConnectionType.QueuedConnection,
+                        Q_ARG(str, cache_path),
+                    )
             except Exception as e:
                 logger.debug("Failed to fetch thumbnail: %s", e)
 
         import threading
         t = threading.Thread(target=_fetch, daemon=True)
         t.start()
+
+    @Slot(str)
+    def _on_thumbnail_file_cached(self, path: str) -> None:
+        """Create and apply QPixmap strictly on GUI thread."""
+        if path and os.path.isfile(path):
+            pix = QPixmap(path)
+            if not pix.isNull():
+                self.set_thumbnail_preview(pix)
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # STATES MANAGEMENT

@@ -274,7 +274,7 @@ class HomePage(QWidget):
 
         self._url_input = QLineEdit()
         self._url_input.setPlaceholderText(
-            "Paste link here... (e.g. youtube.com/watch?v=..., instagram.com/reel/..., pin.it/...)"
+            "Paste link here... (e.g. youtube.com/watch?v=..., instagram.com/reel/..., facebook.com/reel/...)"
         )
         self._url_input.setFont(QFont("Segoe UI", 10))
         self._url_input.setMinimumHeight(42)
@@ -376,7 +376,7 @@ class HomePage(QWidget):
 
         tiles_info = [
             ("YouTube", "youtube", "Videos, Shorts & Clips", "#FF5542", "youtube"),
-            ("Instagram", "instagram", "Reels, Posts, Stories & Carousels", "#E1306C", "instagram"),
+            ("Instagram", "instagram", "Reels, Stories & Carousels", "#E1306C", "instagram"),
             ("Facebook", "facebook", "Watch, Reels, Page Videos & Shares", "#1877F2", "facebook"),
         ]
 

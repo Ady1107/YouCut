@@ -1,4 +1,4 @@
-﻿# Multi-Platform Support Specification & Pull Request Guide
+# Multi-Platform Support Specification & Pull Request Guide
 
 **Branch**: `feat/multi-platform-support`  
 **Base**: `main`  
@@ -41,7 +41,7 @@ This feature branch expands YouCut beyond YouTube to become a modern, multi-plat
 ### B. Core Downloader Optimization (`clipgrab/core/downloader.py`)
 - Added `fetch_platform_id` to `DownloadWorker`.
 - **Dynamic `--no-playlist`**: For YouTube, `--no-playlist` is retained to prevent unintentional playlist expansion. For Instagram and other platforms, `--no-playlist` is omitted to enable multi-item carousel post extraction.
-- **Login Error Classification**: Detects authentication barriers (`login required`, `private video`, `authentication required`) and cleanly presents helpful messaging rather than raw tracebacks.
+- **Login Error Classification**: Detects login or restriction barriers (`login required`, `private video`, `authentication required`) and cleanly presents messaging indicating that login-required content is not supported.
 
 ### C. Queue & Data Layer Integration (`clipgrab/core/queue_manager.py`)
 - Added `platform_id: str = "youtube"` to `QueueItem` metadata.

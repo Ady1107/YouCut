@@ -10,11 +10,12 @@ Central source of truth for:
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Optional
+import sys
+from typing import TYPE_CHECKING, Any, Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QPalette
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QWidget
 
 from clipgrab.core.logger import get_logger
 
@@ -598,6 +599,38 @@ QStatusBar {{
     padding: 2px 8px;
 }}
 
+/* ━━━ Context Menus ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+QMenu {{
+    background-color: {bg_card};
+    color: {text_primary};
+    border: 1px solid {border_card};
+    border-radius: 8px;
+    padding: 4px;
+}}
+
+QMenu::item {{
+    padding: 6px 16px;
+    border-radius: 4px;
+    color: {text_primary};
+}}
+
+QMenu::item:selected {{
+    background-color: {bg_pill_selected};
+    color: {text_primary};
+}}
+
+QMenu::separator {{
+    height: 1px;
+    background-color: {border_divider};
+    margin: 4px 0;
+}}
+
+/* ━━━ Dialogs ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+QDialog {{
+    background-color: {bg_app};
+    color: {text_primary};
+}}
+
 QScrollArea {{
     border: none;
     background: transparent;
@@ -649,41 +682,173 @@ LIGHT_STYLESHEET = _generate_stylesheet(
 )
 
 
+def resolve_theme(theme_name: str) -> str:
+    """
+    Resolve 'system' to either 'light' or 'dark' based on OS/Qt palette.
+    If 'light' or 'dark' is passed, returns it as-is.
+    """
+    if theme_name == "system":
+        try:
+            from PySide6.QtGui import QGuiApplication
+            hints = QGuiApplication.styleHints()
+            if hasattr(hints, "colorScheme"):
+                scheme = hints.colorScheme()
+                if scheme == Qt.ColorScheme.Light:
+                    return "light"
+                elif scheme == Qt.ColorScheme.Dark:
+                    return "dark"
+        except Exception:
+            pass
+        if sys.platform == "win32":
+            try:
+                import winreg
+                key = winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER,
+                    r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+                )
+                val, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+                winreg.CloseKey(key)
+                return "light" if val == 1 else "dark"
+            except Exception:
+                pass
+        return "dark"
+    return theme_name
+
+
+class ThemeManager(QObject):
+    """
+    Singleton manager that notifies widgets when the theme changes.
+    """
+    themeChanged = Signal(str)  # Emits effective theme ("dark" or "light")
+
+    _instance: Optional[ThemeManager] = None
+
+    @classmethod
+    def instance(cls) -> ThemeManager:
+        if cls._instance is None:
+            cls._instance = ThemeManager()
+        return cls._instance
+
+    def __init__(self, parent: Optional[QObject] = None) -> None:
+        super().__init__(parent)
+        self._current_effective_theme: str = "dark"
+        self._configured_theme: str = "dark"
+        self._system_timer: Optional[QTimer] = None
+        self._setup_system_listener()
+
+    def _setup_system_listener(self) -> None:
+        # 1. Qt 6.5+ styleHints().colorSchemeChanged
+        try:
+            from PySide6.QtGui import QGuiApplication
+            hints = QGuiApplication.styleHints()
+            if hasattr(hints, "colorSchemeChanged"):
+                hints.colorSchemeChanged.connect(self._on_system_scheme_changed)
+        except Exception as e:
+            logger.debug("colorSchemeChanged connection failed: %s", e)
+
+        # 2. Windows registry polling fallback timer (checks every 3s if configured == 'system')
+        if sys.platform == "win32":
+            self._system_timer = QTimer(self)
+            self._system_timer.setInterval(3000)
+            self._system_timer.timeout.connect(self._check_windows_registry_theme)
+            self._system_timer.start()
+
+    def _on_system_scheme_changed(self, scheme: Any = None) -> None:
+        if self._configured_theme == "system":
+            app = QApplication.instance()
+            if app:
+                apply_theme(app, "system")
+
+    def _check_windows_registry_theme(self) -> None:
+        if self._configured_theme == "system":
+            new_effective = resolve_theme("system")
+            if new_effective != self._current_effective_theme:
+                app = QApplication.instance()
+                if app:
+                    apply_theme(app, "system")
+
+
+def set_window_title_bar_theme(window: QWidget, is_dark: bool) -> None:
+    """
+    Apply dark or light title bar on Windows 10/11 using DWM API.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from ctypes import c_int, byref, sizeof
+        if not window:
+            return
+        hwnd = int(window.winId())
+        DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+        DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1 = 19
+        val = c_int(1 if is_dark else 0)
+        res = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, byref(val), sizeof(val)
+        )
+        if res != 0:
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1, byref(val), sizeof(val)
+            )
+    except Exception as e:
+        logger.debug("Could not set DWM window attribute: %s", e)
+
+
 def apply_theme(app: QApplication, theme_name: str = "dark") -> None:
     """
-    Apply dark or light theme to the application.
+    Apply dark, light, or system theme to the application.
     """
     init_fonts()
     app.setStyle("Fusion")
 
-    if theme_name == "light":
+    effective_theme = resolve_theme(theme_name)
+    app.setProperty("configured_theme", theme_name)
+    is_dark = (effective_theme != "light")
+
+    if not is_dark:
         palette = _build_palette(_LIGHT_PALETTE_COLORS)
         app.setPalette(palette)
         app.setStyleSheet(LIGHT_STYLESHEET)
         app.setProperty("current_theme", "light")
-        logger.info("Light theme and Inter typography applied")
+        logger.info("Light theme and Inter typography applied (configured: %s)", theme_name)
     else:
         palette = _build_palette(_DARK_PALETTE_COLORS)
         app.setPalette(palette)
         app.setStyleSheet(DARK_STYLESHEET)
         app.setProperty("current_theme", "dark")
-        logger.info("Dark theme and Inter typography applied")
+        logger.info("Dark theme and Inter typography applied (configured: %s)", theme_name)
 
     app_font = QFont()
     app_font.setFamilies(FONT_FAMILIES)
     app_font.setPixelSize(14)
     app.setFont(app_font)
 
+    # Set title bar dark mode on all top-level windows
+    for top_widget in app.topLevelWidgets():
+        set_window_title_bar_theme(top_widget, is_dark)
 
-def toggle_theme(app: QApplication, settings: AppSettings) -> str:
+    # Notify ThemeManager singleton
+    tm = ThemeManager.instance()
+    tm._configured_theme = theme_name
+    changed = (tm._current_effective_theme != effective_theme)
+    tm._current_effective_theme = effective_theme
+    if changed:
+        tm.themeChanged.emit(effective_theme)
+
+
+def toggle_theme(app: QApplication, settings: AppSettings, new_theme: Optional[str] = None) -> str:
     """
-    Toggle between dark and light themes, saving to settings.
+    Set a specific theme or toggle between dark and light themes, saving to settings.
     """
-    cur_theme = getattr(settings, "theme", "dark")
-    new_theme = "light" if cur_theme == "dark" else "dark"
-    apply_theme(app, new_theme)
-    settings.update(theme=new_theme)
-    return new_theme
+    if new_theme:
+        target_theme = new_theme
+    else:
+        cur_theme = getattr(settings, "theme", "dark")
+        target_theme = "light" if cur_theme == "dark" else "dark"
+
+    apply_theme(app, target_theme)
+    settings.update(theme=target_theme)
+    return resolve_theme(target_theme)
 
 
 def get_accent_color() -> QColor:

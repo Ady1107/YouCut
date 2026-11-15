@@ -57,8 +57,6 @@ class DownloadRequest:
         concurrent_fragments: int = 16,
         convert_to_gif: bool = False,
         platform_id: str = "youtube",
-        cookies_file_path: Optional[str] = None,
-        browser_for_cookies: Optional[str] = None,
     ):
         self.url = url
         self.output_dir = output_dir
@@ -75,8 +73,6 @@ class DownloadRequest:
         self.concurrent_fragments = concurrent_fragments
         self.convert_to_gif = convert_to_gif
         self.platform_id = platform_id
-        self.cookies_file_path = cookies_file_path
-        self.browser_for_cookies = browser_for_cookies
 
 
 def kill_process_tree(pid: int) -> None:
@@ -228,19 +224,6 @@ class DownloadWorker(QObject):
         if platform_id in ("youtube",):
             cmd.append("--no-playlist")
 
-        # Age-restricted & cookie authentication support
-        try:
-            from clipgrab.config.settings import AppSettings
-            _s = AppSettings.load()
-            _b = getattr(_s, "browser_for_cookies", "").strip().lower()
-            _cf = getattr(_s, "cookies_file_path", "").strip()
-            if _cf and os.path.isfile(_cf):
-                cmd.extend(["--cookies", _cf])
-            elif _b and _b not in ("none", ""):
-                cmd.extend(["--cookies-from-browser", _b])
-        except Exception:
-            pass
-
         cmd += ["--ffmpeg-location", get_ffmpeg_directory(), url]
 
         try:
@@ -267,49 +250,6 @@ class DownloadWorker(QObject):
 
             if returncode != 0:
                 stderr = stderr.strip()
-                # If failure was caused by browser cookie database locking (e.g. Chrome is open),
-                # retry fetch without cookies! Public videos and reels do not require cookies.
-                has_browser_cookies = "--cookies-from-browser" in cmd
-                is_cookie_lock = any(
-                    k in stderr.lower() for k in ("cookie database", "could not copy", "cookie lock", "cookies-from-browser")
-                )
-                if is_cookie_lock and has_browser_cookies and not self._cancel_requested:
-                    logger.warning("Browser cookie database is locked (%s). Retrying fetch without cookies...", stderr)
-                    cmd_no_cookies = []
-                    skip_next = False
-                    for arg in cmd:
-                        if skip_next:
-                            skip_next = False
-                            continue
-                        if arg == "--cookies-from-browser":
-                            skip_next = True
-                            continue
-                        cmd_no_cookies.append(arg)
-
-                    try:
-                        retry_proc = subprocess.Popen(
-                            cmd_no_cookies,
-                            stdin=subprocess.DEVNULL,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
-                            text=True,
-                            creationflags=_CREATION_FLAGS,
-                            encoding="utf-8",
-                            errors="replace",
-                        )
-                        self._fetch_process = retry_proc
-                        self._process_pid = retry_proc.pid
-                        stdout_retry, stderr_retry = retry_proc.communicate(timeout=45)
-                        if retry_proc.returncode == 0 and stdout_retry.strip():
-                            info_dict = json.loads(stdout_retry.strip())
-                            video_info = parse_video_info(info_dict)
-                            self.info_fetched.emit(video_info)
-                            return
-                        stderr = stderr_retry.strip()
-                        returncode = retry_proc.returncode
-                    except Exception as retry_err:
-                        logger.error("Retry without cookies also failed: %s", retry_err)
-
                 is_extraction = _is_extraction_related(stderr)
                 error_msg = _classify_error(stderr, is_extraction)
                 logger.error("yt-dlp info fetch failed (rc=%d): %s", returncode, stderr)
@@ -746,19 +686,6 @@ class DownloadWorker(QObject):
         if getattr(request, "platform_id", "youtube") in ("youtube",):
             cmd.append("--no-playlist")
 
-        # Age-restricted & cookie authentication support
-        try:
-            from clipgrab.config.settings import AppSettings
-            _s = AppSettings.load()
-            _b = (getattr(request, "browser_for_cookies", None) or getattr(_s, "browser_for_cookies", "")).strip().lower()
-            _cf = (getattr(request, "cookies_file_path", None) or getattr(_s, "cookies_file_path", "")).strip()
-            if _cf and os.path.isfile(_cf):
-                cmd.extend(["--cookies", _cf])
-            elif _b and _b not in ("none", ""):
-                cmd.extend(["--cookies-from-browser", _b])
-        except Exception:
-            pass
-
         if request.audio_only:
             cmd.extend([
                 "-f", "bestaudio/best",
@@ -870,14 +797,7 @@ class DownloadWorker(QObject):
 def _classify_error(stderr: str, is_extraction: bool) -> str:
     stderr_lower = stderr.lower()
 
-    # 1. Browser Cookie DB lock (specific to --cookies-from-browser when browser is running)
-    if any(k in stderr_lower for k in ("could not copy", "cookie database", "cookie lock")):
-        return (
-            "Your browser (e.g. Chrome) has locked its cookie database because it is currently running. "
-            "Please close your browser, or select 'None' for browser cookies in Settings > Cookies & Authentication."
-        )
-
-    # 2. Network & Connection Timeouts / Drops (Must check BEFORE content restrictions!)
+    # 1. Network & Connection Timeouts / Drops (Must check BEFORE content restrictions!)
     if any(k in stderr_lower for k in (
         "error number -138",
         "timed out",
@@ -898,36 +818,25 @@ def _classify_error(stderr: str, is_extraction: bool) -> str:
             "Please check your internet connection and retry."
         )
 
-    # 3. Bot verification / Captcha check
+    # 2. Bot verification / Captcha check
     if "bot" in stderr_lower and any(w in stderr_lower for w in ("sign in", "confirm", "robot", "captcha", "checkpoint")):
-        return (
-            "YouTube requested bot verification (sign in to confirm you're not a bot). "
-            "To resolve this, select your browser in Settings > Cookies & Authentication or try again in a few minutes."
-        )
+        return "YouTube requested verification or sign-in. This content requires login and can't be downloaded by YouCut."
 
-    # 4. Age restriction (Strict word boundaries to never match words like 'webpage', 'percentage', 'message', etc.)
+    # 3. Age restriction
     if re.search(r"\b(age[- ]restricted|confirm your age|inappropriate for some users|sign in to confirm your age)\b", stderr_lower):
-        return (
-            "This video is age-restricted. "
-            "To download it, select your browser in Settings > Cookies & Authentication, "
-            "or provide an authorized cookies.txt file."
-        )
+        return "This content requires login and can't be downloaded by YouCut."
 
-    # 5. Private / Sign-in required
+    # 4. Private / Sign-in required
     if any(k in stderr_lower for k in ("private video", "this video is private", "sign in to view this video")):
-        return "This video is private. You need the owner's permission to access it."
+        return "This content requires login and can't be downloaded by YouCut."
 
     if any(k in stderr_lower for k in ("members-only", "join this channel")):
-        return "This video is available to channel members only."
+        return "This video is available to channel members only and can't be downloaded by YouCut."
 
     if any(k in stderr_lower for k in ("registered users", "login", "log in", "checkpoint", "not granting access", "empty media response", "authentication")):
-        return (
-            "This post is private or restricted by Facebook/Instagram. "
-            "To access it, select your browser in Settings > Cookies & Authentication, "
-            "or provide an authorized cookies.txt file."
-        )
+        return "This content requires login and can't be downloaded by YouCut."
 
-    # 6. Content status & availability
+    # 5. Content status & availability
     if "unavailable" in stderr_lower or "removed" in stderr_lower or "video has been deleted" in stderr_lower:
         return "This media is unavailable. It may have been removed or made private."
     if "copyright" in stderr_lower:
@@ -939,13 +848,12 @@ def _classify_error(stderr: str, is_extraction: bool) -> str:
     if "live" in stderr_lower and ("not started" in stderr_lower or "offline" in stderr_lower):
         return "This live stream has not started yet or is no longer available."
 
-    # 7. Formats & Encoding
+    # 6. Formats & Encoding
     if "no video formats" in stderr_lower:
         if is_extraction:
             return (
                 "No downloadable video found in this post. "
-                "(Note: Photo-only posts cannot be downloaded as videos). "
-                "If this is a video post, it may require login in Settings > Cookies & Authentication."
+                "(Note: Photo-only posts cannot be downloaded as videos)."
             )
         return "The selected format is not available. Try selecting a different quality."
     if "format" in stderr_lower and "not available" in stderr_lower:

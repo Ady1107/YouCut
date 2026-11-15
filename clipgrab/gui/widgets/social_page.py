@@ -617,17 +617,6 @@ class SocialDownloadPage(QWidget):
         )
         self._retry_btn.clicked.connect(self._on_fetch_clicked)
         err_layout.addWidget(self._retry_btn)
-
-        self._open_settings_btn = QPushButton("⚙ Configure Cookies in Settings")
-        self._open_settings_btn.setFixedHeight(32)
-        self._open_settings_btn.setFont(get_font(pixel_size=12, weight=QFont.Weight.DemiBold))
-        self._open_settings_btn.setStyleSheet(
-            f"QPushButton {{ background-color: {BG_CARD_ALT}; color: {COLOR_ACCENT}; border: 1px solid rgba(255, 92, 77, 0.3); border-radius: 8px; padding: 0 14px; }}"
-            f"QPushButton:hover {{ background-color: rgba(255, 92, 77, 0.1); }}"
-        )
-        self._open_settings_btn.clicked.connect(lambda: self.switch_platform_requested.emit("settings"))
-        self._open_settings_btn.hide()
-        err_layout.addWidget(self._open_settings_btn)
         err_layout.addStretch()
 
         self._error_btns_row.hide()
@@ -1008,9 +997,6 @@ class SocialDownloadPage(QWidget):
         if hasattr(self, "_error_btns_row"):
             self._error_btns_row.show()
             self._retry_btn.show()
-            # Show Configure Cookies button if auth/cookies related
-            is_cookie_related = any(k in error_msg.lower() for k in ("cookie", "login", "restrict", "private", "sign in"))
-            self._open_settings_btn.setVisible(is_cookie_related)
         self._status_badge.setText("● Fetch failed")
         self._status_badge.setStyleSheet(f"color: {COLOR_ERROR};")
         self._video_title.setText("Could not fetch media info")
@@ -1133,8 +1119,6 @@ class SocialDownloadPage(QWidget):
             video_format=selected_vf if isinstance(selected_vf, VideoFormat) else None,
             audio_format=selected_af if isinstance(selected_af, AudioFormat) else None,
             platform_id=self._platform_id,
-            cookies_file_path=getattr(self._settings, "cookies_file_path", None),
-            browser_for_cookies=getattr(self._settings, "browser_for_cookies", None),
             concurrent_fragments=getattr(self._settings, "concurrent_fragments", 16) if self._settings else 16,
         )
 

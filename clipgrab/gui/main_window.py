@@ -13,7 +13,7 @@ import os
 from typing import Any, Optional
 
 import requests
-from PySide6.QtCore import QPoint, Qt, QTimer
+from PySide6.QtCore import QPoint, Qt, QTimer, QMetaObject, Q_ARG, Slot
 from PySide6.QtGui import QFont, QKeyEvent, QKeySequence, QPixmap, QResizeEvent, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -220,9 +220,10 @@ class MainWindow(QMainWindow):
         )
         self._update_manager.update_installed.connect(self._on_ytdlp_updated)
         self._update_manager.app_update_available.connect(self._on_app_update_available)
+        self._update_manager.has_update_available.connect(self._sidebar.set_settings_badge)
 
         # Settings panel
-        self._settings_panel.theme_toggle_requested.connect(self._on_theme_toggle)
+        self._settings_panel.theme_changed.connect(self._on_theme_changed)
         self._settings_panel.settings_changed.connect(self._on_settings_changed)
 
         # History re-download
@@ -235,9 +236,16 @@ class MainWindow(QMainWindow):
 
     def _start_background_services(self) -> None:
         """Start background services with tracked timers."""
+        self._update_manager.set_settings(self._settings)
         self._update_manager.auto_update = self._settings.auto_update_ytdlp
+        self._update_manager.auto_update_app = self._settings.auto_update_app
+        self._update_manager.auto_update_ffmpeg = self._settings.auto_update_ffmpeg
         self._update_manager.app_update_url = getattr(self._settings, "app_update_url", "")
         self._update_manager.set_last_check_from_config(self._settings.last_update_check)
+
+        # Show cached badges instantly on startup
+        self._update_manager.load_cached_badges()
+        self._sidebar.set_settings_badge(self._update_manager._has_any_update_available())
 
         self._startup_update_timer = QTimer(self)
         self._startup_update_timer.setSingleShot(True)
@@ -714,6 +722,14 @@ class MainWindow(QMainWindow):
             new_theme = toggle_theme(app, self._settings)
             self._apply_theme_to_all_pages(new_theme)
 
+    def _on_theme_changed(self, theme_key: str) -> None:
+        app = QApplication.instance()
+        if app:
+            effective_theme = toggle_theme(app, self._settings, new_theme=theme_key)
+            self._apply_theme_to_all_pages(effective_theme)
+            from clipgrab.gui.theme import set_window_title_bar_theme
+            set_window_title_bar_theme(self, effective_theme != "light")
+
     def _apply_theme_to_all_pages(self, theme_name: str) -> None:
         """Apply theme color and styling updates across all pages and widgets."""
         is_dark = (theme_name == "dark")
@@ -770,8 +786,12 @@ class MainWindow(QMainWindow):
                     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
                     with open(cache_path, "wb") as f:
                         f.write(resp.content)
-                    pix = QPixmap(cache_path)
-                    QTimer.singleShot(0, lambda: self._apply_thumbnail(pix))
+                    QMetaObject.invokeMethod(
+                        self,
+                        "_apply_thumbnail_path",
+                        Qt.ConnectionType.QueuedConnection,
+                        Q_ARG(str, cache_path),
+                    )
             except Exception as e:
                 logger.debug("Thumbnail cache failed: %s", e)
 
@@ -780,6 +800,16 @@ class MainWindow(QMainWindow):
         thread = threading.Thread(target=_download, daemon=True)
         self._thumbnail_threads.append(thread)
         thread.start()
+
+    @Slot(str)
+    def _apply_thumbnail_path(self, path: str) -> None:
+        """Create and apply QPixmap strictly on the main GUI thread."""
+        if path and os.path.isfile(path):
+            pix = QPixmap(path)
+            if not pix.isNull():
+                cur = self._stack.currentWidget()
+                if hasattr(cur, "set_thumbnail_preview"):
+                    cur.set_thumbnail_preview(pix)
 
     def _apply_thumbnail(self, pix: QPixmap) -> None:
         cur = self._stack.currentWidget()

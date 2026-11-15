@@ -8,9 +8,8 @@ Verifies all 10 requirements:
 5. Playback Speed Controls (0.25x-2x, apply during playback)
 6. YouTube Captions — Always Disabled (Strictly CC OFF by default on load, quality/speed change)
 7. In/Out Keyboard Shortcuts (I, O, input field exemption, validation)
-8. Age-Restricted Video Support (Browser cookies & cookies.txt in Settings and yt-dlp)
-9. Global Playback Synchronisation (Central PlaybackController)
-10. Testing & Regression
+8. Global Playback Synchronisation (Central PlaybackController)
+9. Testing & Regression
 """
 
 import os
@@ -245,24 +244,6 @@ def test_in_out_keyboard_shortcuts_and_safety(qapp):
     assert page._end_seconds == 120
 
 
-def test_age_restricted_settings(qapp):
-    """Task 8: Age-restricted browser cookies in settings."""
-    settings = AppSettings()
-    updater = UpdateManager()
-    panel = SettingsPanel(update_manager=updater, settings=settings)
-    
-    # Change browser for cookies
-    panel._browser_combo.setCurrentText("chrome")
-    assert settings.browser_for_cookies == "chrome"
-
-    panel._browser_combo.setCurrentText("None")
-    assert settings.browser_for_cookies == ""
-
-    # Custom cookies file
-    panel._on_clear_cookies()
-    assert settings.cookies_file_path == ""
-
-
 if __name__ == "__main__":
     app = QApplication.instance() or QApplication([])
     print("Running test_download_type_markers...")
@@ -279,6 +260,4 @@ if __name__ == "__main__":
     test_captions_always_disabled_by_default(app)
     print("Running test_in_out_keyboard_shortcuts_and_safety...")
     test_in_out_keyboard_shortcuts_and_safety(app)
-    print("Running test_age_restricted_settings...")
-    test_age_restricted_settings(app)
-    print("\nALL 8 PLAYBACK & SYNCHRONISATION TESTS PASSED!")
+    print("\nALL 7 PLAYBACK & SYNCHRONISATION TESTS PASSED!")

@@ -37,14 +37,23 @@ def get_ffmpeg_path() -> str:
     Resolve the path to ffmpeg.exe.
 
     Searches in:
-      1. sys._MEIPASS (PyInstaller temp folder in --onefile mode)
-      2. Folder next to the executable
-      3. Development assets folder
-      4. System PATH
+      1. Persistent user-updated copy in ~/.youcut/bin/ffmpeg.exe
+      2. sys._MEIPASS (PyInstaller temp folder in --onefile mode)
+      3. Folder next to the executable
+      4. Development assets folder
+      5. System PATH
 
     Returns:
         Absolute path to ffmpeg.exe.
     """
+    # 1. User updated copy in ~/.youcut/bin/ (persists across runs/updates)
+    env_home = os.environ.get("YOUCUT_HOME")
+    base_dir = Path(env_home).resolve() if env_home else Path.home() / ".youcut"
+    user_ffmpeg = base_dir / "bin" / "ffmpeg.exe"
+    if user_ffmpeg.is_file():
+        logger.debug("Resolved user ffmpeg path: %s", user_ffmpeg)
+        return str(user_ffmpeg)
+
     candidates = [
         os.path.join(_get_assets_dir(), "ffmpeg.exe"),
         os.path.join(_get_assets_dir(), "assets", "ffmpeg.exe"),
@@ -139,16 +148,41 @@ def get_ytdlp_path() -> str:
     return fallback
 
 
-def verify_ffmpeg() -> tuple[bool, str]:
+# ── In-Memory Verification Caches ───────────────────────────────────────────
+_CACHED_FFMPEG_VERIFICATION: Optional[tuple[bool, str]] = None
+_CACHED_YTDLP_VERIFICATION: Optional[tuple[bool, str]] = None
+
+
+def invalidate_ffmpeg_cache() -> None:
+    """Invalidate cached FFmpeg verification result (call after update)."""
+    global _CACHED_FFMPEG_VERIFICATION
+    _CACHED_FFMPEG_VERIFICATION = None
+
+
+def invalidate_ytdlp_cache() -> None:
+    """Invalidate cached yt-dlp verification result (call after update)."""
+    global _CACHED_YTDLP_VERIFICATION
+    _CACHED_YTDLP_VERIFICATION = None
+
+
+def verify_ffmpeg(force: bool = False) -> tuple[bool, str]:
     """
     Verify that the bundled ffmpeg.exe exists and can run.
 
     Checks that the file exists, then runs 'ffmpeg -version' to confirm
-    it's a valid, executable binary.
+    it's a valid, executable binary. Caches result in memory to avoid
+    spawning redundant subprocesses at startup.
+
+    Args:
+        force: If True, re-executes ffmpeg -version ignoring cache.
 
     Returns:
         A tuple of (is_ok, version_string_or_error_message).
     """
+    global _CACHED_FFMPEG_VERIFICATION
+    if not force and _CACHED_FFMPEG_VERIFICATION is not None:
+        return _CACHED_FFMPEG_VERIFICATION
+
     ffmpeg_path = get_ffmpeg_path()
 
     if not os.path.isfile(ffmpeg_path):
@@ -159,6 +193,7 @@ def verify_ffmpeg() -> tuple[bool, str]:
             "and place ffmpeg.exe in the assets/ directory."
         )
         logger.error("FFmpeg not found: %s", ffmpeg_path)
+        _CACHED_FFMPEG_VERIFICATION = (False, error_msg)
         return False, error_msg
 
     try:
@@ -172,34 +207,46 @@ def verify_ffmpeg() -> tuple[bool, str]:
         if result.returncode != 0:
             error_msg = f"FFmpeg returned non-zero exit code: {result.returncode}"
             logger.error(error_msg)
+            _CACHED_FFMPEG_VERIFICATION = (False, error_msg)
             return False, error_msg
 
         first_line = result.stdout.split("\n")[0] if result.stdout else "unknown"
         version_info = first_line.strip()
         logger.info("FFmpeg verified: %s", version_info)
+        _CACHED_FFMPEG_VERIFICATION = (True, version_info)
         return True, version_info
 
     except FileNotFoundError:
         error_msg = f"FFmpeg binary is not executable: {ffmpeg_path}"
         logger.error(error_msg)
+        _CACHED_FFMPEG_VERIFICATION = (False, error_msg)
         return False, error_msg
     except subprocess.TimeoutExpired:
         error_msg = "FFmpeg verification timed out (10s)"
         logger.error(error_msg)
+        _CACHED_FFMPEG_VERIFICATION = (False, error_msg)
         return False, error_msg
     except OSError as e:
         error_msg = f"FFmpeg execution failed: {e}"
         logger.error(error_msg)
+        _CACHED_FFMPEG_VERIFICATION = (False, error_msg)
         return False, error_msg
 
 
-def verify_ytdlp() -> tuple[bool, str]:
+def verify_ytdlp(force: bool = False) -> tuple[bool, str]:
     """
-    Verify that the bundled yt-dlp.exe exists and can run.
+    Verify that the bundled yt-dlp.exe exists and can run. Caches in memory.
+
+    Args:
+        force: If True, re-executes yt-dlp --version ignoring cache.
 
     Returns:
         A tuple of (is_ok, version_string_or_error_message).
     """
+    global _CACHED_YTDLP_VERIFICATION
+    if not force and _CACHED_YTDLP_VERIFICATION is not None:
+        return _CACHED_YTDLP_VERIFICATION
+
     ytdlp_path = get_ytdlp_path()
 
     if not os.path.isfile(ytdlp_path):
@@ -210,6 +257,7 @@ def verify_ytdlp() -> tuple[bool, str]:
             "and place yt-dlp.exe in the assets/ directory."
         )
         logger.error("yt-dlp not found: %s", ytdlp_path)
+        _CACHED_YTDLP_VERIFICATION = (False, error_msg)
         return False, error_msg
 
     try:
@@ -223,23 +271,28 @@ def verify_ytdlp() -> tuple[bool, str]:
         if result.returncode != 0:
             error_msg = f"yt-dlp returned non-zero exit code: {result.returncode}"
             logger.error(error_msg)
+            _CACHED_YTDLP_VERIFICATION = (False, error_msg)
             return False, error_msg
 
         version = result.stdout.strip()
         logger.info("yt-dlp verified: %s", version)
+        _CACHED_YTDLP_VERIFICATION = (True, version)
         return True, version
 
     except FileNotFoundError:
         error_msg = f"yt-dlp binary is not executable: {ytdlp_path}"
         logger.error(error_msg)
+        _CACHED_YTDLP_VERIFICATION = (False, error_msg)
         return False, error_msg
     except subprocess.TimeoutExpired:
         error_msg = "yt-dlp verification timed out (10s)"
         logger.error(error_msg)
+        _CACHED_YTDLP_VERIFICATION = (False, error_msg)
         return False, error_msg
     except OSError as e:
         error_msg = f"yt-dlp execution failed: {e}"
         logger.error(error_msg)
+        _CACHED_YTDLP_VERIFICATION = (False, error_msg)
         return False, error_msg
 
 

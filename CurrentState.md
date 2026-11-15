@@ -169,7 +169,8 @@ YouCut employs a custom-engineered `QPalette` design system paired with surgical
      - Added QLockFile at ~/.youcut/youcut.lock.
      - Added QLocalServer IPC (YouCut_SingleInstance_IPC): second launch sends ACTIVATE, focuses/raises primary window, and exits 0.
    - clipgrab/gui/widgets/settings_panel.py:
-     - Added 'Copy Diagnostics' button that redacts query strings (?[REDACTED_QUERY]) and cookie paths, and copies to system clipboard.
+     - Added 'Copy Diagnostics' button that redacts query strings (?[REDACTED_QUERY]) and copies to system clipboard.
+     - Note: Login-required or private content is not supported.
 
 3. **GUI Verification Suite (Automated Real QTest)**:
    - scratch/test_full_suite.py executed and PASSED 100%:

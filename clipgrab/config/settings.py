@@ -86,16 +86,29 @@ class AppSettings:
     default_merge_format: str = "mp4"
     default_audio_format: str = "mp3"
 
-    # Theme
-    theme: str = "dark"  # "dark" or "light"
+    # Theme ("dark", "light", or "system")
+    theme: str = "dark"
 
     # Download performance
     concurrent_fragments: int = 16
+    default_video_format: str = "mp4"   # "mp4", "mkv", "webm", etc.
+    default_trim_mode: str = "auto"     # "auto", "fast", "exact"
 
-    # yt-dlp update settings
+    # Update settings
+    auto_update_app: bool = True
     auto_update_ytdlp: bool = True
+    auto_update_ffmpeg: bool = False
     last_update_check: str = ""  # ISO timestamp
+    last_checked_all: str = ""   # Display string or ISO timestamp
     last_ytdlp_version: str = ""
+    last_ffmpeg_version: str = ""
+
+    # Component update cache (last_check_time, latest_version, size, release_notes_url, download_url, last_toast_version)
+    update_cache: dict[str, dict[str, Any]] = field(default_factory=lambda: {
+        "youcut": {"last_check_time": "", "latest_version": "", "size": "", "release_notes_url": "", "download_url": "", "last_toast_version": ""},
+        "ytdlp": {"last_check_time": "", "latest_version": "", "size": "", "release_notes_url": "", "download_url": "", "last_toast_version": ""},
+        "ffmpeg": {"last_check_time": "", "latest_version": "", "size": "", "release_notes_url": "", "download_url": "", "last_toast_version": ""},
+    })
 
     # App update settings (empty = use default from clipgrab.version)
     app_update_url: str = ""
@@ -114,10 +127,6 @@ class AppSettings:
     sidebar_collapsed: bool = False
     expanded_groups: list[str] = field(default_factory=lambda: ["youtube", "instagram", "facebook"])
     last_section: str = "home"
-
-    # Age-restricted & cookie authentication
-    browser_for_cookies: str = ""  # e.g. "chrome", "firefox", "edge", "brave", "" for None
-    cookies_file_path: str = ""    # Custom cookies.txt path
     section_preferences: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -161,6 +170,24 @@ class AppSettings:
             if not isinstance(data, dict):
                 logger.warning("Config file contains non-dict data, using defaults")
                 return cls()
+
+            # One-time migration: drop leftover legacy authentication keys if present
+            legacy_auth_keys = (
+                "browser_for_cookies",
+                "cookies_file_path",
+                "cookie_browser",
+                "cookies_path",
+            )
+            has_legacy = any(k in data for k in legacy_auth_keys)
+            if has_legacy:
+                for k in legacy_auth_keys:
+                    data.pop(k, None)
+                try:
+                    with open(config_path, "w", encoding="utf-8") as f:
+                        json.dump(data, f, indent=2)
+                    logger.info("Migrated config.json: removed legacy authentication keys")
+                except Exception as e:
+                    logger.warning("Could not persist cleaned config.json: %s", e)
 
             # Create settings with loaded values, falling back to defaults
             settings = cls()

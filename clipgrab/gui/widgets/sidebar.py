@@ -336,10 +336,22 @@ class Sidebar(QWidget):
         layout.addWidget(hist_btn)
 
         # Settings
+        set_container = QWidget()
+        set_layout = QHBoxLayout(set_container)
+        set_layout.setContentsMargins(0, 0, 0, 0)
+        set_layout.setSpacing(0)
+
         set_btn = SidebarNavButton("settings", "Settings", "settings")
         set_btn.clicked.connect(lambda: self.select_page("settings"))
         self._nav_buttons["settings"] = set_btn
-        layout.addWidget(set_btn)
+        set_layout.addWidget(set_btn)
+
+        self._settings_dot = QLabel("●")
+        self._settings_dot.setFont(get_font(point_size=8, weight=QFont.Weight.Bold))
+        self._settings_dot.setStyleSheet(f"color: {COLOR_ACCENT}; background: transparent; border: none; padding-right: 8px;")
+        self._settings_dot.hide()
+        set_layout.addWidget(self._settings_dot)
+        layout.addWidget(set_container)
 
         # ── 7. Flexible Spacer ───────────────────────────────────────────────
         layout.addStretch(1)
@@ -394,6 +406,11 @@ class Sidebar(QWidget):
             self._queue_badge.show()
         else:
             self._queue_badge.hide()
+
+    def set_settings_badge(self, has_update: bool) -> None:
+        """Show or hide the red update indicator dot on Settings button."""
+        if hasattr(self, "_settings_dot"):
+            self._settings_dot.setVisible(bool(has_update))
 
     def set_status(self, text: str, state: str = "ready") -> None:
         """Update bottom-left status pill."""

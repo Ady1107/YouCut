@@ -375,10 +375,14 @@ class TestResponsiveAndSocial(unittest.TestCase):
         settings = self.win._settings
         sp = self.win._settings_panel
 
-        # Ensure theme combo and toggle button are available
-        self.assertIsNotNone(sp._theme_combo)
-        self.assertIsNotNone(sp._theme_btn)
-        self.assertEqual(sp._theme_combo.count(), 2)
+        # Ensure starting in dark theme
+        settings.update(theme="dark")
+        apply_theme(self.app, "dark")
+
+        # Ensure theme preview cards are available
+        self.assertIsNotNone(sp._theme_card_dark)
+        self.assertIsNotNone(sp._theme_card_light)
+        self.assertIsNotNone(sp._theme_card_system)
 
         # Toggle to Light Theme
         new_theme = toggle_theme(self.app, settings)
