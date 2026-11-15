@@ -198,104 +198,190 @@ class TestFullSuite(unittest.TestCase):
 
     # ── PART 4: Update Cooldowns, Cache, Badges & Toggles ──────────────────────
 
-    def test_part4_cooldown_detection(self) -> None:
-        """Verify cooldown blocks background checks when recently performed and allows after elapsed."""
+    def test_part4_toggle_off_startup_zero_calls_and_no_timers(self) -> None:
+        """Verify toggle OFF results in zero network calls on startup and no active timers."""
+        mgr = self.update_manager
+        mgr.auto_update_app = False
+        mgr.auto_update = False
+        mgr.auto_update_ffmpeg = False
+
+        self.assertFalse(mgr.is_timer_active("youcut"))
+        self.assertFalse(mgr.is_timer_active("ytdlp"))
+        self.assertFalse(mgr.is_timer_active("ffmpeg"))
+
+        with patch.object(mgr, "_run_app_check") as mock_app, \
+             patch.object(mgr, "_run_check") as mock_ytdlp, \
+             patch.object(mgr, "check_ffmpeg") as mock_ff:
+            mgr.startup_check()
+            mock_app.assert_not_called()
+            mock_ytdlp.assert_not_called()
+            mock_ff.assert_not_called()
+
+        self.assertFalse(mgr.is_timer_active("youcut"))
+        self.assertFalse(mgr.is_timer_active("ytdlp"))
+        self.assertFalse(mgr.is_timer_active("ffmpeg"))
+
+    def test_part4_manual_click_works_and_ignores_cooldown(self) -> None:
+        """Verify manual check works and ignores cooldown even if checked moments ago."""
         mgr = self.update_manager
         now = datetime.now(timezone.utc)
-
-        # Set cache with check done 1 hour ago
-        c = mgr._get_cache("youcut")
-        c["last_check_time"] = (now - timedelta(hours=1)).isoformat()
-        c["last_check_success"] = True
-
-        # YouCut cooldown is 24h -> should be active
-        self.assertTrue(mgr._is_cooldown_active("youcut", COOLDOWN_YOUCUT_SECONDS))
-
-        # Check done 25 hours ago -> cooldown expired
-        c["last_check_time"] = (now - timedelta(hours=25)).isoformat()
-        self.assertFalse(mgr._is_cooldown_active("youcut", COOLDOWN_YOUCUT_SECONDS))
-
-        # Failed network check retries after 1h
-        c["last_check_success"] = False
-        c["last_check_time"] = (now - timedelta(minutes=30)).isoformat()
-        self.assertTrue(mgr._is_cooldown_active("youcut", COOLDOWN_YOUCUT_SECONDS))
-        c["last_check_time"] = (now - timedelta(minutes=70)).isoformat()
-        self.assertFalse(mgr._is_cooldown_active("youcut", COOLDOWN_YOUCUT_SECONDS))
-
-    def test_part4_manual_check_bypasses_cooldown(self) -> None:
-        """Verify check_all(force=True) bypasses cooldowns."""
-        mgr = self.update_manager
-        now = datetime.now(timezone.utc)
-
-        # Set all caches to 10 seconds ago
         for comp in ("youcut", "ytdlp", "ffmpeg"):
             c = mgr._get_cache(comp)
             c["last_check_time"] = (now - timedelta(seconds=10)).isoformat()
             c["last_check_success"] = True
 
+        self.assertTrue(mgr._is_cooldown_active("youcut", COOLDOWN_YOUCUT_SECONDS))
+        self.assertTrue(mgr._is_cooldown_active("ytdlp", COOLDOWN_YTDLP_SECONDS))
+        self.assertTrue(mgr._is_cooldown_active("ffmpeg", COOLDOWN_FFMPEG_SECONDS))
+
         with patch.object(mgr, "_run_app_check") as mock_app, \
              patch.object(mgr, "_run_check") as mock_ytdlp, \
              patch("clipgrab.core.updater.FFmpegUpdateChecker") as mock_ff:
-            # Force check
             mgr.check_all(force=True)
             mock_app.assert_called_once()
             mock_ytdlp.assert_called_once()
 
-    def test_part4_load_cached_badges_and_drop_cache(self) -> None:
-        """Verify cached badges show immediately on launch and drop when installed >= latest."""
-        mgr = self.update_manager
-
-        # Set cache with a newer version
-        c_youcut = mgr._get_cache("youcut")
-        c_youcut["latest_version"] = "99.0.0"
-        c_youcut["download_url"] = "https://example.com/setup.exe"
-
-        status_received = []
-        mgr.app_status_changed.connect(lambda s, v, n, u: status_received.append((s, v)))
-        mgr.load_cached_badges()
-
-        self.assertIn(("available", "99.0.0"), status_received)
-
-        # Now simulate installed version >= latest (e.g. user updated)
-        with patch("clipgrab.core.updater.APP_VERSION", "99.0.0"):
-            status_received.clear()
-            mgr.load_cached_badges()
-            self.assertEqual(c_youcut["latest_version"], "")
-            self.assertIn(("up_to_date", "99.0.0"), status_received)
-
-    def test_part4_toggle_off_one_time_toast_and_badge(self) -> None:
-        """Verify that when auto_update is OFF, toast notifications only show once per version."""
+    def test_part4_toggle_off_update_found_no_download_until_update_now_clicked(self) -> None:
+        """Verify that when toggle is OFF, finding an update does not trigger download until Update now is clicked."""
         mgr = self.update_manager
         mgr.auto_update = False
         mgr._settings.update(auto_update_ytdlp=False)
 
-        toasts = []
-        mgr.toast_message.connect(toasts.append)
+        with patch.object(mgr, "_perform_update") as mock_perf:
+            mgr._on_ytdlp_check_completed("2026.10.01", "2026.11.01", update_available=True, success=True)
+            # Must NOT download automatically
+            mock_perf.assert_not_called()
+            c = mgr._get_cache("ytdlp")
+            self.assertEqual(c["latest_version"], "2026.11.01")
 
-        # First time update available: toast emitted
-        mgr._on_ytdlp_check_completed("2026.10.01", "2026.11.01", True, True)
-        self.assertEqual(len(toasts), 1)
-        self.assertIn("2026.11.01", toasts[0])
+            # Click "Update now"
+            mgr.update_ytdlp()
+            mock_perf.assert_called_once()
 
-        # Second time check completes with same version: NO duplicate toast
-        mgr._on_ytdlp_check_completed("2026.10.01", "2026.11.01", True, True)
-        self.assertEqual(len(toasts), 1)
-
-    def test_part4_toggle_on_deferred_when_queue_busy(self) -> None:
-        """Verify that when auto_update is ON and queue is busy, update is deferred until idle."""
+    def test_part4_toggle_on_cooldown_respected_and_autoinstall_when_idle(self) -> None:
+        """Verify toggle ON respects cooldowns and auto-installs deferred updates once queue is idle."""
         mgr = self.update_manager
         mgr.auto_update = True
-        mgr.set_queue_busy(True)
+        now = datetime.now(timezone.utc)
 
+        # Set check done recently
+        c = mgr._get_cache("ytdlp")
+        c["last_check_time"] = (now - timedelta(hours=1)).isoformat()
+        c["last_check_success"] = True
+
+        with patch.object(mgr, "_run_check") as mock_chk:
+            mgr.check_ytdlp(force=False)
+            mock_chk.assert_not_called()
+
+        # Cooldown expired -> check runs
+        c["last_check_time"] = (now - timedelta(hours=13)).isoformat()
+        with patch.object(mgr, "_run_check") as mock_chk:
+            mgr.check_ytdlp(force=False)
+            mock_chk.assert_called_once()
+
+        # Update found while queue is busy -> deferred
+        mgr.set_queue_busy(True)
         with patch.object(mgr, "_perform_update") as mock_perf:
             mgr._on_ytdlp_check_completed("2026.10.01", "2026.11.01", True, True)
             self.assertTrue(mgr._pending_update)
             mock_perf.assert_not_called()
 
-            # When queue becomes idle, update is applied
+            # Idle queue -> auto installs
             mgr.set_queue_busy(False)
             mock_perf.assert_called_once()
             self.assertFalse(mgr._pending_update)
+
+    def test_part4_flipping_toggle_off_stops_timer_and_cancels_pending_update(self) -> None:
+        """Verify flipping toggle OFF stops component timer and cancels pending auto-install."""
+        mgr = self.update_manager
+        mgr.auto_update = True
+        self.assertTrue(mgr.is_timer_active("ytdlp"))
+
+        # Mark pending deferred update
+        mgr._pending_update = True
+
+        # Flip toggle OFF
+        mgr.auto_update = False
+        self.assertFalse(mgr.is_timer_active("ytdlp"))
+        self.assertFalse(mgr._pending_update)
+
+        # Flip back ON
+        with patch.object(mgr, "_run_check"):
+            mgr.auto_update = True
+        self.assertTrue(mgr.is_timer_active("ytdlp"))
+
+    def test_part4_cached_update_available_badge_survives_restart_and_drops(self) -> None:
+        """Verify cached 'Update available' badge survives restart without network calls and drops when updated."""
+        mgr = self.update_manager
+
+        # Save an available update to cache
+        c = mgr._get_cache("youcut")
+        c["latest_version"] = "99.0.0"
+        c["download_url"] = "https://example.com/setup.exe"
+        c["release_notes_url"] = "https://example.com/notes"
+        mgr._save_settings()
+
+        # Simulate restart: fresh UpdateManager
+        new_mgr = UpdateManager(settings=mgr._settings)
+        status_received = []
+        new_mgr.app_status_changed.connect(lambda s, v, n, u: status_received.append((s, v)))
+
+        # Badges loaded with ZERO network calls
+        with patch.object(new_mgr, "_run_app_check") as mock_app:
+            new_mgr.load_cached_badges()
+            mock_app.assert_not_called()
+
+        self.assertIn(("available", "99.0.0"), status_received)
+        self.assertTrue(new_mgr._has_any_update_available())
+
+        # Now simulate installed version >= latest -> cache dropped
+        with patch("clipgrab.core.updater.APP_VERSION", "99.0.0"):
+            status_received.clear()
+            new_mgr.load_cached_badges()
+            self.assertEqual(c["latest_version"], "")
+            self.assertIn(("up_to_date", "99.0.0"), status_received)
+
+        new_mgr.shutdown()
+
+    def test_part4_network_failure_does_not_count_as_checked_and_retries_after_one_hour(self) -> None:
+        """Verify network failure does not count as checked and retries after 1 hour."""
+        mgr = self.update_manager
+        now = datetime.now(timezone.utc)
+        c = mgr._get_cache("youcut")
+        c["last_check_time"] = ""
+        c["last_failure_time"] = ""
+
+        # Trigger failed check
+        mgr._on_app_check_failed("Connection error")
+        self.assertEqual(c["last_check_time"], "")  # NOT counted as checked
+        self.assertNotEqual(c["last_failure_time"], "")
+        self.assertFalse(c["last_check_success"])
+
+        # Within 1h -> in failure retry cooldown
+        self.assertTrue(mgr._is_cooldown_active("youcut", COOLDOWN_YOUCUT_SECONDS))
+
+        # After 1h -> cooldown expired for retry
+        c["last_failure_time"] = (now - timedelta(minutes=65)).isoformat()
+        self.assertFalse(mgr._is_cooldown_active("youcut", COOLDOWN_YOUCUT_SECONDS))
+
+    def test_part4_header_format_last_checked(self) -> None:
+        """Verify format_last_checked outputs 'Not checked yet', 'today', 'yesterday', or date."""
+        from clipgrab.core.updater import format_last_checked
+        now = datetime.now()
+
+        self.assertEqual(format_last_checked(""), "Not checked yet")
+        self.assertEqual(format_last_checked(None), "Not checked yet")
+
+        today_str = format_last_checked(now)
+        self.assertTrue(today_str.startswith("Last checked today,"))
+
+        yesterday_str = format_last_checked(now - timedelta(days=1))
+        self.assertTrue(yesterday_str.startswith("Last checked yesterday,"))
+
+        old_str = format_last_checked(now - timedelta(days=10))
+        self.assertTrue(old_str.startswith("Last checked "))
+        self.assertNotIn("today", old_str)
+        self.assertNotIn("yesterday", old_str)
 
 
 if __name__ == "__main__":

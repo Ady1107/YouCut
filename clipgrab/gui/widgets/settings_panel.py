@@ -57,6 +57,7 @@ from clipgrab.core.ffmpeg_utils import verify_ffmpeg
 from clipgrab.core.logger import get_logger
 from clipgrab.core.updater import (
     UpdateManager,
+    format_last_checked,
     get_installed_ffmpeg_version,
     get_installed_ytdlp_version,
 )
@@ -1163,10 +1164,18 @@ class SettingsPanel(QWidget):
 
     def _load_from_settings(self) -> None:
         # Last checked string
-        last_checked = getattr(self._settings, "last_checked_all", "")
-        if not last_checked:
-            last_checked = f"Checked today, {datetime.now().strftime('%H:%M')}"
-        self._last_checked_label.setText(last_checked)
+        last_checked_iso = getattr(self._settings, "last_checked_iso", "")
+        if not last_checked_iso:
+            cache = getattr(self._settings, "update_cache", {})
+            times = []
+            if isinstance(cache, dict):
+                for comp in ("youcut", "ytdlp", "ffmpeg"):
+                    t = cache.get(comp, {}).get("last_check_time")
+                    if t:
+                        times.append(t)
+            if times:
+                last_checked_iso = max(times)
+        self._last_checked_label.setText(format_last_checked(last_checked_iso))
 
         # Output folder
         self._folder_input.setText(self._settings.last_output_folder)

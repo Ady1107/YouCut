@@ -100,6 +100,7 @@ class AppSettings:
     auto_update_ffmpeg: bool = False
     last_update_check: str = ""  # ISO timestamp
     last_checked_all: str = ""   # Display string or ISO timestamp
+    last_checked_iso: str = ""   # ISO timestamp of last successful real check
     last_ytdlp_version: str = ""
     last_ffmpeg_version: str = ""
 

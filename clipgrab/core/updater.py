@@ -16,7 +16,7 @@ import shutil
 import subprocess
 import sys
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -70,6 +70,51 @@ def _is_newer(remote: str, local: str) -> bool:
         return version.parse(remote_clean) > version.parse(local_clean)
     except Exception:
         return _parse_version(remote) > _parse_version(local)
+
+
+def _is_installed_ge_latest(installed: str, latest: str) -> bool:
+    """Return True if installed version is greater than or equal to latest version (packaging.version.parse)."""
+    if not installed or not latest or installed == "unknown":
+        return False
+    try:
+        from packaging import version
+        inst_clean = str(installed).strip().lstrip("vV")
+        lat_clean = str(latest).strip().lstrip("vV")
+        return version.parse(inst_clean) >= version.parse(lat_clean)
+    except Exception:
+        inst_clean = str(installed).strip().lstrip("vV")
+        lat_clean = str(latest).strip().lstrip("vV")
+        return (inst_clean == lat_clean) or (lat_clean in inst_clean)
+
+
+def format_last_checked(dt_or_iso: Any) -> str:
+    """Format check time as 'Last checked today, HH:MM', 'Last checked yesterday, HH:MM', or 'Last checked Mon DD, YYYY'."""
+    if not dt_or_iso:
+        return "Not checked yet"
+    if isinstance(dt_or_iso, str):
+        try:
+            dt = datetime.fromisoformat(dt_or_iso)
+        except Exception:
+            return dt_or_iso if dt_or_iso.startswith("Last checked") else f"Last checked {dt_or_iso}"
+    elif isinstance(dt_or_iso, datetime):
+        dt = dt_or_iso
+    else:
+        return "Not checked yet"
+
+    now = datetime.now()
+    if dt.tzinfo is not None:
+        dt = dt.astimezone()
+        now = now.astimezone()
+
+    today = now.date()
+    check_date = dt.date()
+    time_str = dt.strftime("%H:%M")
+    if check_date == today:
+        return f"Last checked today, {time_str}"
+    elif check_date == today - timedelta(days=1):
+        return f"Last checked yesterday, {time_str}"
+    else:
+        return f"Last checked {dt.strftime('%b %d, %Y')}"
 
 
 # ── App Update Checker ───────────────────────────────────────────────────────
@@ -799,12 +844,31 @@ class UpdateManager(QObject):
         self._app_update_url: str = ""
         self._latest_ffmpeg_download_url: str = ""
         self._app_check_is_manual: bool = False
+        self._pending_app_update: bool = False
 
-        # Periodic timer (checks every 6 hours)
-        self._periodic_timer = QTimer(self)
-        self._periodic_timer.setInterval(PERIODIC_CHECK_INTERVAL_MS)
-        self._periodic_timer.timeout.connect(self._on_periodic_timeout)
-        self._periodic_timer.start()
+        # Component periodic timers (evaluates cooldown every 6 hours)
+        self._youcut_timer = QTimer(self)
+        self._youcut_timer.setInterval(PERIODIC_CHECK_INTERVAL_MS)
+        self._youcut_timer.timeout.connect(self._on_youcut_periodic_timeout)
+
+        self._ytdlp_timer = QTimer(self)
+        self._ytdlp_timer.setInterval(PERIODIC_CHECK_INTERVAL_MS)
+        self._ytdlp_timer.timeout.connect(self._on_ytdlp_periodic_timeout)
+
+        self._ffmpeg_timer = QTimer(self)
+        self._ffmpeg_timer.setInterval(PERIODIC_CHECK_INTERVAL_MS)
+        self._ffmpeg_timer.timeout.connect(self._on_ffmpeg_periodic_timeout)
+
+        # Alias for backwards compatibility
+        self._periodic_timer = self._ytdlp_timer
+
+        # Start timer ONLY for components with auto_update toggle ON
+        if self._auto_update_app:
+            self._youcut_timer.start()
+        if self._auto_update:
+            self._ytdlp_timer.start()
+        if self._auto_update_ffmpeg:
+            self._ffmpeg_timer.start()
 
         # Worker thread references (prevent GC)
         self._check_thread: Optional[QThread] = None
@@ -822,12 +886,40 @@ class UpdateManager(QObject):
         self._app_installer_worker: Optional[AppInstallerDownloader] = None
 
     def set_settings(self, settings: AppSettings) -> None:
-        """Update settings reference."""
+        """Update settings reference and configure component timers."""
         self._settings = settings
         if self._settings:
             self._auto_update_app = getattr(self._settings, "auto_update_app", True)
             self._auto_update = getattr(self._settings, "auto_update_ytdlp", True)
             self._auto_update_ffmpeg = getattr(self._settings, "auto_update_ffmpeg", False)
+            if hasattr(self, "_youcut_timer") and self._youcut_timer:
+                if self._auto_update_app:
+                    if not self._youcut_timer.isActive():
+                        self._youcut_timer.start()
+                else:
+                    self._youcut_timer.stop()
+            if hasattr(self, "_ytdlp_timer") and self._ytdlp_timer:
+                if self._auto_update:
+                    if not self._ytdlp_timer.isActive():
+                        self._ytdlp_timer.start()
+                else:
+                    self._ytdlp_timer.stop()
+            if hasattr(self, "_ffmpeg_timer") and self._ffmpeg_timer:
+                if self._auto_update_ffmpeg:
+                    if not self._ffmpeg_timer.isActive():
+                        self._ffmpeg_timer.start()
+                else:
+                    self._ffmpeg_timer.stop()
+
+    def is_timer_active(self, component: str) -> bool:
+        """Return True if periodic check timer is active for component."""
+        if component == "youcut":
+            return bool(hasattr(self, "_youcut_timer") and self._youcut_timer and self._youcut_timer.isActive())
+        elif component == "ytdlp":
+            return bool(hasattr(self, "_ytdlp_timer") and self._ytdlp_timer and self._ytdlp_timer.isActive())
+        elif component == "ffmpeg":
+            return bool(hasattr(self, "_ffmpeg_timer") and self._ffmpeg_timer and self._ffmpeg_timer.isActive())
+        return False
 
     def _get_cache(self, component: str) -> dict[str, Any]:
         """Return or create update cache dict for component."""
@@ -871,7 +963,7 @@ class UpdateManager(QObject):
     def load_cached_badges(self) -> None:
         """
         Show cached badges instantly on launch.
-        Drop cache when installed >= latest.
+        Drop cache when installed >= latest (packaging.version.parse).
         """
         if not self._settings:
             return
@@ -881,7 +973,7 @@ class UpdateManager(QObject):
         c_youcut = self._get_cache("youcut")
         latest_youcut = c_youcut.get("latest_version", "")
         if latest_youcut:
-            if not _is_newer(latest_youcut, cur_youcut):
+            if _is_installed_ge_latest(cur_youcut, latest_youcut):
                 # Installed version is equal or newer: drop cache!
                 c_youcut["latest_version"] = ""
                 c_youcut["download_url"] = ""
@@ -900,12 +992,7 @@ class UpdateManager(QObject):
         c_ytdlp = self._get_cache("ytdlp")
         latest_ytdlp = c_ytdlp.get("latest_version", "")
         if latest_ytdlp and cur_ytdlp != "unknown":
-            try:
-                from packaging import version
-                is_newer_ytdlp = version.parse(latest_ytdlp) > version.parse(cur_ytdlp)
-            except Exception:
-                is_newer_ytdlp = (latest_ytdlp.strip() != cur_ytdlp.strip())
-            if not is_newer_ytdlp:
+            if _is_installed_ge_latest(cur_ytdlp, latest_ytdlp):
                 c_ytdlp["latest_version"] = ""
                 self._save_settings()
                 self.ytdlp_status_changed.emit("up_to_date", cur_ytdlp, cur_ytdlp)
@@ -917,8 +1004,7 @@ class UpdateManager(QObject):
         c_ffmpeg = self._get_cache("ffmpeg")
         latest_ffmpeg = c_ffmpeg.get("latest_version", "")
         if latest_ffmpeg and cur_ffmpeg != "unknown":
-            is_newer_ffmpeg = (latest_ffmpeg not in cur_ffmpeg and cur_ffmpeg not in latest_ffmpeg)
-            if not is_newer_ffmpeg:
+            if _is_installed_ge_latest(cur_ffmpeg, latest_ffmpeg):
                 c_ffmpeg["latest_version"] = ""
                 self._save_settings()
                 self.ffmpeg_status_changed.emit("up_to_date", cur_ffmpeg, cur_ffmpeg, "", "")
@@ -934,8 +1020,38 @@ class UpdateManager(QObject):
         self.has_update_available.emit(self._has_any_update_available())
 
     def _is_cooldown_active(self, component: str, cooldown_seconds: int) -> bool:
-        """Return True if cooldown interval has not elapsed yet."""
+        """
+        Return True if cooldown interval has not elapsed yet.
+        On network failure do not count as checked; retry at most once per hour.
+        """
         cache = self._get_cache(component)
+        now = datetime.now(timezone.utc)
+
+        # 1. Network failure retry cooldown (at most once per hour)
+        fail_str = cache.get("last_failure_time", "")
+        if fail_str:
+            try:
+                fail_dt = datetime.fromisoformat(fail_str)
+                if fail_dt.tzinfo is None:
+                    fail_dt = fail_dt.replace(tzinfo=timezone.utc)
+                if (now - fail_dt).total_seconds() < RETRY_FAILED_NETWORK_SECONDS:
+                    return True
+            except Exception:
+                pass
+
+        # Support fallback legacy last_check_success=False
+        if not cache.get("last_check_success", True) and not fail_str:
+            last_check = cache.get("last_check_time", "")
+            if last_check:
+                try:
+                    chk_dt = datetime.fromisoformat(last_check)
+                    if chk_dt.tzinfo is None:
+                        chk_dt = chk_dt.replace(tzinfo=timezone.utc)
+                    return (now - chk_dt).total_seconds() < RETRY_FAILED_NETWORK_SECONDS
+                except Exception:
+                    pass
+
+        # 2. Regular check cooldown from last successful check
         last_str = cache.get("last_check_time", "")
         if not last_str:
             return False
@@ -943,29 +1059,40 @@ class UpdateManager(QObject):
             last_dt = datetime.fromisoformat(last_str)
             if last_dt.tzinfo is None:
                 last_dt = last_dt.replace(tzinfo=timezone.utc)
-            now = datetime.now(timezone.utc)
-            elapsed = (now - last_dt).total_seconds()
-            if not cache.get("last_check_success", True):
-                return elapsed < RETRY_FAILED_NETWORK_SECONDS
-            return elapsed < cooldown_seconds
+            return (now - last_dt).total_seconds() < cooldown_seconds
         except Exception:
             return False
+
+    def _record_successful_check(self, component: str) -> None:
+        """Record real check completion time in cache and config and notify UI."""
+        c = self._get_cache(component)
+        now = datetime.now(timezone.utc)
+        iso_str = now.isoformat()
+        c["last_check_time"] = iso_str
+        c["last_failure_time"] = ""
+        c["last_check_success"] = True
+        self._last_check_time = now
+        if self._settings:
+            self._settings.update(last_checked_iso=iso_str)
+            self._save_settings()
+        self.all_checks_completed.emit(format_last_checked(now))
 
     def shutdown(self) -> None:
         """Stop all update timers, terminate all update workers/threads, and clean up."""
         logger.info("Shutdown: Stopping update timer and update threads...")
-        if self._periodic_timer:
-            self._periodic_timer.stop()
+        if hasattr(self, "_youcut_timer") and self._youcut_timer:
+            self._youcut_timer.stop()
+        if hasattr(self, "_ytdlp_timer") and self._ytdlp_timer:
+            self._ytdlp_timer.stop()
+        if hasattr(self, "_ffmpeg_timer") and self._ffmpeg_timer:
+            self._ffmpeg_timer.stop()
 
         # Stop check worker/thread
         if self._check_worker:
             self._check_worker.cancel()
         if self._check_thread and self._check_thread.isRunning():
             self._check_thread.quit()
-            if not self._check_thread.wait(2000):
-                logger.warning("Shutdown: Update check thread did not stop within 2s, terminating...")
-                self._check_thread.terminate()
-                self._check_thread.wait(1000)
+            self._check_thread.wait(500)
         self._check_thread = None
         self._check_worker = None
 
@@ -974,10 +1101,7 @@ class UpdateManager(QObject):
             self._update_worker.cancel()
         if self._update_thread and self._update_thread.isRunning():
             self._update_thread.quit()
-            if not self._update_thread.wait(2000):
-                logger.warning("Shutdown: Update thread did not stop within 2s, terminating...")
-                self._update_thread.terminate()
-                self._update_thread.wait(1000)
+            self._update_thread.wait(500)
         self._update_thread = None
         self._update_worker = None
 
@@ -986,10 +1110,7 @@ class UpdateManager(QObject):
             self._app_checker.cancel()
         if self._app_check_thread and self._app_check_thread.isRunning():
             self._app_check_thread.quit()
-            if not self._app_check_thread.wait(2000):
-                logger.warning("Shutdown: App check thread did not stop within 2s, terminating...")
-                self._app_check_thread.terminate()
-                self._app_check_thread.wait(1000)
+            self._app_check_thread.wait(500)
         self._app_check_thread = None
         self._app_checker = None
 
@@ -998,10 +1119,7 @@ class UpdateManager(QObject):
             self._ffmpeg_checker.cancel()
         if self._ffmpeg_check_thread and self._ffmpeg_check_thread.isRunning():
             self._ffmpeg_check_thread.quit()
-            if not self._ffmpeg_check_thread.wait(2000):
-                logger.warning("Shutdown: FFmpeg check thread did not stop within 2s, terminating...")
-                self._ffmpeg_check_thread.terminate()
-                self._ffmpeg_check_thread.wait(1000)
+            self._ffmpeg_check_thread.wait(500)
         self._ffmpeg_check_thread = None
         self._ffmpeg_checker = None
 
@@ -1010,10 +1128,7 @@ class UpdateManager(QObject):
             self._ffmpeg_updater.cancel()
         if self._ffmpeg_update_thread and self._ffmpeg_update_thread.isRunning():
             self._ffmpeg_update_thread.quit()
-            if not self._ffmpeg_update_thread.wait(2000):
-                logger.warning("Shutdown: FFmpeg update thread did not stop within 2s, terminating...")
-                self._ffmpeg_update_thread.terminate()
-                self._ffmpeg_update_thread.wait(1000)
+            self._ffmpeg_update_thread.wait(500)
         self._ffmpeg_update_thread = None
         self._ffmpeg_updater = None
 
@@ -1022,7 +1137,7 @@ class UpdateManager(QObject):
             self._app_installer_worker.cancel()
         if self._app_installer_thread and self._app_installer_thread.isRunning():
             self._app_installer_thread.quit()
-            self._app_installer_thread.wait(1000)
+            self._app_installer_thread.wait(500)
         self._app_installer_thread = None
         self._app_installer_worker = None
 
@@ -1044,8 +1159,21 @@ class UpdateManager(QObject):
 
     @auto_update.setter
     def auto_update(self, value: bool) -> None:
-        self._auto_update = value
-        logger.info("yt-dlp auto-update set to %s", value)
+        self._auto_update = bool(value)
+        if self._settings:
+            self._settings.update(auto_update_ytdlp=self._auto_update)
+            self._save_settings()
+        if not self._auto_update:
+            if hasattr(self, "_ytdlp_timer") and self._ytdlp_timer:
+                self._ytdlp_timer.stop()
+            self._pending_update = False
+            logger.info("yt-dlp auto-update turned OFF (timer stopped, pending auto-install cancelled)")
+        else:
+            if hasattr(self, "_ytdlp_timer") and self._ytdlp_timer and not self._ytdlp_timer.isActive():
+                self._ytdlp_timer.start()
+            logger.info("yt-dlp auto-update turned ON (running cooldown-guarded check)")
+            if not self._is_cooldown_active("ytdlp", COOLDOWN_YTDLP_SECONDS):
+                self.check_ytdlp(force=False)
 
     @property
     def auto_update_app(self) -> bool:
@@ -1054,7 +1182,21 @@ class UpdateManager(QObject):
 
     @auto_update_app.setter
     def auto_update_app(self, value: bool) -> None:
-        self._auto_update_app = value
+        self._auto_update_app = bool(value)
+        if self._settings:
+            self._settings.update(auto_update_app=self._auto_update_app)
+            self._save_settings()
+        if not self._auto_update_app:
+            if hasattr(self, "_youcut_timer") and self._youcut_timer:
+                self._youcut_timer.stop()
+            self._pending_app_update = False
+            logger.info("YouCut auto-update turned OFF (timer stopped, pending auto-install cancelled)")
+        else:
+            if hasattr(self, "_youcut_timer") and self._youcut_timer and not self._youcut_timer.isActive():
+                self._youcut_timer.start()
+            logger.info("YouCut auto-update turned ON (running cooldown-guarded check)")
+            if not self._is_cooldown_active("youcut", COOLDOWN_YOUCUT_SECONDS):
+                self.check_app(force=False, is_manual=False)
 
     @property
     def auto_update_ffmpeg(self) -> bool:
@@ -1063,7 +1205,21 @@ class UpdateManager(QObject):
 
     @auto_update_ffmpeg.setter
     def auto_update_ffmpeg(self, value: bool) -> None:
-        self._auto_update_ffmpeg = value
+        self._auto_update_ffmpeg = bool(value)
+        if self._settings:
+            self._settings.update(auto_update_ffmpeg=self._auto_update_ffmpeg)
+            self._save_settings()
+        if not self._auto_update_ffmpeg:
+            if hasattr(self, "_ffmpeg_timer") and self._ffmpeg_timer:
+                self._ffmpeg_timer.stop()
+            self._pending_ffmpeg_update = False
+            logger.info("FFmpeg auto-update turned OFF (timer stopped, pending auto-install cancelled)")
+        else:
+            if hasattr(self, "_ffmpeg_timer") and self._ffmpeg_timer and not self._ffmpeg_timer.isActive():
+                self._ffmpeg_timer.start()
+            logger.info("FFmpeg auto-update turned ON (running cooldown-guarded check)")
+            if not self._is_cooldown_active("ffmpeg", COOLDOWN_FFMPEG_SECONDS):
+                self.check_ffmpeg(force=False)
 
     def set_queue_busy(self, busy: bool) -> None:
         """Inform whether the download queue is currently active."""
@@ -1078,6 +1234,13 @@ class UpdateManager(QObject):
                 logger.info("Queue idle — applying pending FFmpeg update")
                 self._pending_ffmpeg_update = False
                 self.update_ffmpeg()
+            if self._pending_app_update and self._auto_update_app:
+                logger.info("Queue idle — applying pending YouCut update")
+                self._pending_app_update = False
+                c = self._get_cache("youcut")
+                dl_url = c.get("download_url", "")
+                if getattr(sys, "frozen", False):
+                    self.install_frozen_app_update(dl_url)
 
     def set_last_check_from_config(self, timestamp_str: str) -> None:
         """Restore last-check time from a saved ISO timestamp."""
@@ -1095,30 +1258,47 @@ class UpdateManager(QObject):
 
     def startup_check(self) -> None:
         """
-        Run all update checks on app startup respecting component cooldowns.
+        Run update checks on app startup.
+        Shows cached badges immediately without network calls.
+        For each component:
+          - If toggle is OFF: NO startup or background checks, NO timers.
+          - If toggle is ON: checks only if cooldown has passed, runs periodic timer.
         """
         logger.info("Startup update checks triggered")
         self.load_cached_badges()
 
-        # YouCut check (24h cooldown)
-        if not self._is_cooldown_active("youcut", COOLDOWN_YOUCUT_SECONDS):
-            self.check_app(force=False, is_manual=False)
+        # 1. YouCut check
+        if self._auto_update_app:
+            if not self._is_cooldown_active("youcut", COOLDOWN_YOUCUT_SECONDS):
+                self.check_app(force=False, is_manual=False)
+            else:
+                logger.info("YouCut startup check skipped (checked recently)")
+            if not self._youcut_timer.isActive():
+                self._youcut_timer.start()
         else:
-            logger.info("YouCut startup check skipped (checked recently)")
+            self._youcut_timer.stop()
 
-        # yt-dlp check (12h cooldown)
-        if not self._is_cooldown_active("ytdlp", COOLDOWN_YTDLP_SECONDS):
-            self.check_ytdlp(force=False)
+        # 2. yt-dlp check
+        if self._auto_update:
+            if not self._is_cooldown_active("ytdlp", COOLDOWN_YTDLP_SECONDS):
+                self.check_ytdlp(force=False)
+            else:
+                logger.info("yt-dlp startup check skipped (checked recently)")
+            if not self._ytdlp_timer.isActive():
+                self._ytdlp_timer.start()
         else:
-            logger.info("yt-dlp startup check skipped (checked recently)")
+            self._ytdlp_timer.stop()
 
-        # FFmpeg check (7 days cooldown)
-        if not self._is_cooldown_active("ffmpeg", COOLDOWN_FFMPEG_SECONDS):
-            self.check_ffmpeg(force=False)
+        # 3. FFmpeg check
+        if self._auto_update_ffmpeg:
+            if not self._is_cooldown_active("ffmpeg", COOLDOWN_FFMPEG_SECONDS):
+                self.check_ffmpeg(force=False)
+            else:
+                logger.info("FFmpeg startup check skipped (checked recently)")
+            if not self._ffmpeg_timer.isActive():
+                self._ffmpeg_timer.start()
         else:
-            logger.info("FFmpeg startup check skipped (checked recently)")
-
-        self._restart_periodic_timer()
+            self._ffmpeg_timer.stop()
 
     def on_extraction_error(self) -> None:
         """Trigger an immediate yt-dlp update check (bypasses cooldown)."""
@@ -1130,29 +1310,57 @@ class UpdateManager(QObject):
             self._periodic_timer.stop()
             self._periodic_timer.start()
 
-    def _on_periodic_timeout(self) -> None:
-        logger.info("Periodic update check triggered (6h interval)")
-        if not self._is_cooldown_active("youcut", COOLDOWN_YOUCUT_SECONDS):
+    def _on_youcut_periodic_timeout(self) -> None:
+        if self._auto_update_app and not self._is_cooldown_active("youcut", COOLDOWN_YOUCUT_SECONDS):
             self.check_app(force=False, is_manual=False)
-        if not self._is_cooldown_active("ytdlp", COOLDOWN_YTDLP_SECONDS):
+
+    def _on_ytdlp_periodic_timeout(self) -> None:
+        if self._auto_update and not self._is_cooldown_active("ytdlp", COOLDOWN_YTDLP_SECONDS):
             self.check_ytdlp(force=False)
-        if not self._is_cooldown_active("ffmpeg", COOLDOWN_FFMPEG_SECONDS):
+
+    def _on_ffmpeg_periodic_timeout(self) -> None:
+        if self._auto_update_ffmpeg and not self._is_cooldown_active("ffmpeg", COOLDOWN_FFMPEG_SECONDS):
             self.check_ffmpeg(force=False)
-        self._restart_periodic_timer()
+
+    def _on_periodic_timeout(self) -> None:
+        self._on_youcut_periodic_timeout()
+        self._on_ytdlp_periodic_timeout()
+        self._on_ffmpeg_periodic_timeout()
 
     def reset_idle_timer(self) -> None:
-        """Reset the periodic check timer."""
-        self._restart_periodic_timer()
+        """Reset the periodic check timers."""
+        if hasattr(self, "_youcut_timer") and self._youcut_timer and self._auto_update_app:
+            self._youcut_timer.stop()
+            self._youcut_timer.start()
+        if hasattr(self, "_ytdlp_timer") and self._ytdlp_timer and self._auto_update:
+            self._ytdlp_timer.stop()
+            self._ytdlp_timer.start()
+        if hasattr(self, "_ffmpeg_timer") and self._ffmpeg_timer and self._auto_update_ffmpeg:
+            self._ffmpeg_timer.stop()
+            self._ffmpeg_timer.start()
+
+    def is_mid_update(self, component: str) -> bool:
+        """Return True if component is currently downloading or applying an update."""
+        if component == "youcut":
+            return bool(self._app_installer_thread and self._app_installer_thread.isRunning())
+        elif component == "ytdlp":
+            return bool(self._update_thread and self._update_thread.isRunning())
+        elif component == "ffmpeg":
+            return bool(self._ffmpeg_update_thread and self._ffmpeg_update_thread.isRunning())
+        return False
 
     def check_all(self, force: bool = True) -> None:
-        """Trigger update checks for YouCut, yt-dlp, and FFmpeg in parallel (bypasses cooldown when force=True)."""
+        """
+        Trigger update checks for YouCut, yt-dlp, and FFmpeg (bypasses cooldown when force=True).
+        Skips components that are mid-update.
+        """
         logger.info("Check all updates triggered (force=%s)", force)
-        self.check_app(force=force, is_manual=True)
-        self.check_ytdlp(force=force)
-        self.check_ffmpeg(force=force)
-        now_str = datetime.now().strftime("%H:%M")
-        checked_str = f"Last checked today, {now_str}"
-        self.all_checks_completed.emit(checked_str)
+        if not self.is_mid_update("youcut"):
+            self.check_app(force=force, is_manual=True)
+        if not self.is_mid_update("ytdlp"):
+            self.check_ytdlp(force=force)
+        if not self.is_mid_update("ffmpeg"):
+            self.check_ffmpeg(force=force)
 
     def manual_check(self) -> None:
         """Force update checks for all components (triggered by user)."""
@@ -1198,10 +1406,9 @@ class UpdateManager(QObject):
     def _on_app_no_update(self) -> None:
         logger.info("YouCut is up to date (v%s)", APP_VERSION)
         c = self._get_cache("youcut")
-        c["last_check_time"] = datetime.now(timezone.utc).isoformat()
-        c["last_check_success"] = True
         c["latest_version"] = ""
-        self._save_settings()
+        c["download_url"] = ""
+        self._record_successful_check("youcut")
 
         self.app_status_changed.emit("up_to_date", APP_VERSION, "", "")
         if self._app_check_is_manual:
@@ -1211,11 +1418,10 @@ class UpdateManager(QObject):
     def _on_app_update_found(self, version: str, notes: str, url: str) -> None:
         logger.info("YouCut app update found: v%s", version)
         c = self._get_cache("youcut")
-        c["last_check_time"] = datetime.now(timezone.utc).isoformat()
-        c["last_check_success"] = True
         c["latest_version"] = version
         c["release_notes_url"] = notes
         c["download_url"] = url
+        self._record_successful_check("youcut")
 
         # One-time toast
         if c.get("last_toast_version") != version:
@@ -1223,6 +1429,18 @@ class UpdateManager(QObject):
             c["last_toast_version"] = version
 
         self._save_settings()
+
+        if self._auto_update_app:
+            if self._queue_busy:
+                self._pending_app_update = True
+                logger.info("YouCut update deferred — queue is busy")
+                self.toast_message.emit(
+                    f"YouCut v{version} update available — will install when queue is idle"
+                )
+            else:
+                if getattr(sys, "frozen", False):
+                    self.install_frozen_app_update(url)
+
         self.app_status_changed.emit("available", version, notes, url)
         self.app_update_available.emit(version, notes, url)
         self.has_update_available.emit(True)
@@ -1230,7 +1448,7 @@ class UpdateManager(QObject):
     def _on_app_check_failed(self, error_msg: str) -> None:
         logger.warning("YouCut update check failed: %s", error_msg)
         c = self._get_cache("youcut")
-        c["last_check_time"] = datetime.now(timezone.utc).isoformat()
+        c["last_failure_time"] = datetime.now(timezone.utc).isoformat()
         c["last_check_success"] = False
         self._save_settings()
 
@@ -1326,19 +1544,20 @@ class UpdateManager(QObject):
     def _on_ytdlp_check_completed(
         self, current: str, latest: str, update_available: bool, success: bool = True
     ) -> None:
-        self._last_check_time = datetime.now(timezone.utc)
         c = self._get_cache("ytdlp")
-        c["last_check_time"] = self._last_check_time.isoformat()
-        c["last_check_success"] = success
 
         if not success:
             logger.warning("yt-dlp update check failed")
+            c["last_failure_time"] = datetime.now(timezone.utc).isoformat()
+            c["last_check_success"] = False
             self._save_settings()
             if c.get("latest_version"):
                 self.ytdlp_status_changed.emit("available", current, c["latest_version"])
             else:
                 self.ytdlp_status_changed.emit("error", current, "")
             return
+
+        self._record_successful_check("ytdlp")
 
         if not update_available or not latest:
             logger.info("yt-dlp is up to date (v%s)", current)
@@ -1467,8 +1686,7 @@ class UpdateManager(QObject):
     ) -> None:
         self._latest_ffmpeg_download_url = dl_url
         c = self._get_cache("ffmpeg")
-        c["last_check_time"] = datetime.now(timezone.utc).isoformat()
-        c["last_check_success"] = True
+        self._record_successful_check("ffmpeg")
         c["size"] = size
         c["download_url"] = dl_url
         c["release_notes_url"] = rel_url
@@ -1479,6 +1697,7 @@ class UpdateManager(QObject):
                 if self._queue_busy:
                     self._pending_ffmpeg_update = True
                     logger.info("FFmpeg update deferred — queue is busy")
+                    self.toast_message.emit("FFmpeg update available — will install when queue is idle")
                 else:
                     self.update_ffmpeg(download_url=dl_url)
             else:
@@ -1499,7 +1718,7 @@ class UpdateManager(QObject):
     def _on_ffmpeg_check_failed(self, error_msg: str) -> None:
         logger.warning("FFmpeg update check failed: %s", error_msg)
         c = self._get_cache("ffmpeg")
-        c["last_check_time"] = datetime.now(timezone.utc).isoformat()
+        c["last_failure_time"] = datetime.now(timezone.utc).isoformat()
         c["last_check_success"] = False
         self._save_settings()
 
